@@ -228,7 +228,7 @@ const useMyLocation = () => {
         <h2>
           {mode === 'login'
             ? isPatient
-              ? 'Patient login'
+              ? 'Patient Login'
               : staffLogin
                 ? 'Branch staff login'
                 : 'Pharmacy owner login'
@@ -331,7 +331,7 @@ const useMyLocation = () => {
           <label>Password<input type="password" minLength={mode === 'register' ? 6 : undefined} onChange={set('password')} required /></label>
           {err && <div className="error-box">{err}</div>}
           <button disabled={busy}>
-            {busy ? 'Please wait…' : mode === 'login' ? (staffLogin ? 'Log in as Staff' : 'Log in as Owner') : 'Create account'}
+            {busy ? 'Please wait…' : mode === 'login' ? (isPatient ? 'Log in as Patient' : staffLogin ? 'Log in as Staff' : 'Log in as Owner') : 'Create account'}
           </button>
         </form>
         {(!staffLogin || mode !== 'login') && (
