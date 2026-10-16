@@ -35,7 +35,15 @@ export default function App() {
   };
 
   const login = data => {
-    const next = { token: data.token, role: data.role, name: data.name, id: data.id };
+    const next = {
+      token: data.token,
+      role: data.role,
+      name: data.name,
+      id: data.id,
+      email: data.email,
+      pharmacyId: data.pharmacy?.id || data.pharmacyId,
+      branch: data.branch || null
+    };
     localStorage.setItem('pf_auth', JSON.stringify(next));
     localStorage.setItem('pf_token', data.token);
     setAuth(next);
@@ -43,14 +51,21 @@ export default function App() {
 
   if (auth && !socket) return null;
   if (auth?.role === 'patient') return <Patient auth={auth} socket={socket} onLogout={logout} />;
-  if (auth?.role === 'pharmacy') return <Dashboard auth={auth} socket={socket} onLogout={logout} />;
+  if (auth?.role === 'pharmacy' || auth?.role === 'staff') return <Dashboard auth={auth} socket={socket} onLogout={logout} />;
 
   return (
     <div className="app-shell">
       <header className="topbar">
-        <button className="brand" onClick={() => setScreen('home')}>PharmaTrack</button>
-        <span className="tagline">Find medicine before you visit.</span>
-      </header>
+  <button className="brand" onClick={() => setScreen('home')}>
+    <img
+      src="/pharmatrack-logo.png"
+      alt="PharmaTrack"
+      className="brand-logo"
+    />
+  </button>
+
+  <span className="tagline">Find medicine before you visit.</span>
+</header>
 
       <main className="landing">
         <section className="hero">
@@ -78,58 +93,252 @@ function RoleCard({ icon, title, text, onClick }) {
 function AuthCard({ role, onLogin, onClose }) {
   const isPatient = role === 'patient';
   const [mode, setMode] = useState('login');
+  const [staffLogin, setStaffLogin] = useState(false);
   const [form, setForm] = useState({});
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [locationMode, setLocationMode] = useState('address');
 
   const set = key => e => { const value = e.target.value; setForm(f => ({ ...f, [key]: value })); };
-  const useMyLocation = () => {
-    if (!navigator.geolocation) return setErr('Location is not supported by this browser');
-    setErr('');
-    navigator.geolocation.getCurrentPosition(
-      p => setForm(f => ({ ...f, lat: p.coords.latitude.toFixed(6), lng: p.coords.longitude.toFixed(6) })),
-      () => setErr('Could not get your location. Allow location access or enter the coordinates manually.'),
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
-  };
-  const submit = async e => {
-    e.preventDefault(); setErr(''); setBusy(true);
-    try {
-      const endpoint = `/auth/${role}/${mode}`;
-      const { api } = await import('./api.js');
-      const data = await api(endpoint, { method: 'POST', body: form });
-      onLogin(data);
-    } catch (e2) { setErr(e2.message); } finally { setBusy(false); }
-  };
+  
+const useMyLocation = () => {
+  if (!navigator.geolocation) {
+    setErr('Location is not supported by this browser');
+    return;
+  }
 
+  setErr('');
+  setBusy(true);
+
+  navigator.geolocation.getCurrentPosition(
+    async (position) => {
+      const lat = position.coords.latitude.toFixed(6);
+      const lng = position.coords.longitude.toFixed(6);
+
+      try {
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&addressdetails=1`
+        );
+
+        if (!response.ok) {
+          throw new Error('Address lookup failed');
+        }
+
+        const data = await response.json();
+
+        const address = data.display_name || '';
+
+        setForm(f => ({
+          ...f,
+          lat,
+          lng,
+          address
+        }));
+
+        setLocationMode('current');
+
+        if (!address) {
+          setErr(
+            'Location detected, but address was not found. Please enter the address manually.'
+          );
+        }
+      } catch (error) {
+        setForm(f => ({
+          ...f,
+          lat,
+          lng
+        }));
+
+        setLocationMode('current');
+
+        setErr(
+          'GPS location detected, but address lookup failed. Please enter the address manually.'
+        );
+      } finally {
+        setBusy(false);
+      }
+    },
+    () => {
+      setErr(
+        'Could not get your location. Please allow location access.'
+      );
+      setBusy(false);
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 15000
+    }
+  );
+
+
+  setErr('');
+  setLocationMode('current');
+
+  navigator.geolocation.getCurrentPosition(
+    p => {
+      setForm(f => ({
+        ...f,
+        lat: p.coords.latitude.toFixed(6),
+        lng: p.coords.longitude.toFixed(6)
+      }));
+    },
+    () => {
+      setErr('Could not get your location. Please allow location access or use the address option.');
+      setLocationMode('address');
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+};
+  const submit = async e => {
+  e.preventDefault();
+  setErr('');
+  setBusy(true);
+
+  try {
+    let endpoint = `/auth/${role}/${mode}`;
+    if (!isPatient && mode === 'login' && staffLogin) {
+      endpoint = '/auth/staff/login';
+    }
+    const { api } = await import('./api.js');
+
+    const requestForm = {
+      ...form,
+      ...(mode === 'register'
+        ? { locationMode }
+        : {})
+    };
+
+    const data = await api(endpoint, {
+      method: 'POST',
+      body: requestForm
+    });
+
+    onLogin(data);
+  } catch (e2) {
+    setErr(e2.message);
+  } finally {
+    setBusy(false);
+  }
+};
   return (
     <div className="modal-backdrop">
       <section className="auth-card">
         <button className="close" onClick={onClose}>×</button>
-        <p className="eyebrow">{isPatient ? 'PATIENT ACCESS' : 'PHARMACY ACCESS'}</p>
-        <h2>{mode === 'login' ? `${isPatient ? 'Patient' : 'Pharmacy'} login` : `Register ${isPatient ? 'as a patient' : 'your pharmacy'}`}</h2>
+        <p className="eyebrow">{isPatient ? 'PATIENT ACCESS' : staffLogin && mode === 'login' ? 'BRANCH STAFF ACCESS' : 'PHARMACY ACCESS'}</p>
+        <h2>
+          {mode === 'login'
+            ? isPatient
+              ? 'Patient login'
+              : staffLogin
+                ? 'Branch staff login'
+                : 'Pharmacy owner login'
+            : isPatient
+              ? 'Register as a patient'
+              : 'Register your pharmacy'}
+        </h2>
+
+        {!isPatient && mode === 'login' && (
+          <div className="auth-role-tabs" style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+            <button
+              type="button"
+              className={!staffLogin ? 'tab active' : 'tab'}
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                borderRadius: '8px',
+                border: !staffLogin ? '2px solid var(--pine)' : '1px solid var(--line)',
+                background: !staffLogin ? 'var(--mint)' : '#fff',
+                color: !staffLogin ? 'var(--pine2)' : 'var(--muted)',
+                fontWeight: 750,
+                cursor: 'pointer'
+              }}
+              onClick={() => { setStaffLogin(false); setErr(''); }}
+            >
+              🏥 Pharmacy Owner
+            </button>
+            <button
+              type="button"
+              className={staffLogin ? 'tab active' : 'tab'}
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                borderRadius: '8px',
+                border: staffLogin ? '2px solid var(--pine)' : '1px solid var(--line)',
+                background: staffLogin ? 'var(--mint)' : '#fff',
+                color: staffLogin ? 'var(--pine2)' : 'var(--muted)',
+                fontWeight: 750,
+                cursor: 'pointer'
+              }}
+              onClick={() => { setStaffLogin(true); setErr(''); }}
+            >
+              👤 Branch Staff
+            </button>
+          </div>
+        )}
+
         <form onSubmit={submit} className="form-grid">
           {mode === 'register' && isPatient && <>
             <label>Full name<input onChange={set('name')} required /></label>
             <label>Phone number<input onChange={set('phone')} required /></label>
+            <label>
+              Address
+              <input
+                type="text"
+                value={form.address || ''}
+                onChange={set('address')}
+                placeholder="Enter or detect patient address"
+                required
+              />
+            </label>
+            <div className="location-options">
+              <button type="button" onClick={useMyLocation}>
+                📍 Use my current location
+              </button>
+
+              {locationMode === 'current' && form.lat && form.lng && (
+                <small className="hint">✓ Current location selected</small>
+              )}
+            </div>
           </>}
           {mode === 'register' && !isPatient && <>
             <label>Pharmacy name<input onChange={set('name')} required /></label>
             <label>Owner / pharmacist name<input onChange={set('ownerName')} /></label>
             <label>Phone number<input onChange={set('phone')} /></label>
-            <label>Address<input onChange={set('address')} required /></label>
-            <button type="button" onClick={useMyLocation}>📍 Use my current location</button>
-            <div className="two-col"><label>Latitude<input type="number" step="any" value={form.lat ?? ''} onChange={set('lat')} required /></label><label>Longitude<input type="number" step="any" value={form.lng ?? ''} onChange={set('lng')} required /></label></div>
-            <small className="hint">Stand inside the pharmacy when you tap the button for an accurate location, or paste coordinates from Google Maps.</small>
-          </>}
+            <label>
+  Address
+  <input
+    type="text"
+    value={form.address || ''}
+    onChange={set('address')}
+    placeholder="Enter or detect pharmacy address"
+    required
+  />
+</label>
+            <div className="location-options">
+  <button type="button" onClick={useMyLocation}>
+    📍 Use my current location
+  </button>
+
+  {locationMode === 'current' && form.lat && form.lng && (
+    <small className="hint">✓ Current location selected</small>
+  )}
+
+  
+
+</div>
+</>}
           <label>Email<input type="email" onChange={set('email')} required /></label>
           <label>Password<input type="password" minLength={mode === 'register' ? 6 : undefined} onChange={set('password')} required /></label>
           {err && <div className="error-box">{err}</div>}
-          <button disabled={busy}>{busy ? 'Please wait…' : mode === 'login' ? 'Log in' : 'Create account'}</button>
+          <button disabled={busy}>
+            {busy ? 'Please wait…' : mode === 'login' ? (staffLogin ? 'Log in as Staff' : 'Log in as Owner') : 'Create account'}
+          </button>
         </form>
-        <button className="text-button" onClick={() => { setErr(''); setMode(mode === 'login' ? 'register' : 'login'); }}>
-          {mode === 'login' ? `New ${isPatient ? 'patient' : 'pharmacy'}? Register` : 'Already have an account? Log in'}
-        </button>
+        {(!staffLogin || mode !== 'login') && (
+          <button className="text-button" onClick={() => { setErr(''); setMode(mode === 'login' ? 'register' : 'login'); }}>
+            {mode === 'login' ? `New ${isPatient ? 'patient' : 'pharmacy'}? Register` : 'Already have an account? Log in'}
+          </button>
+        )}
       </section>
     </div>
   );
