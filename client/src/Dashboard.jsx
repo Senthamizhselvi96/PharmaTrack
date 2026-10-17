@@ -32,7 +32,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
   const [stockFilter, setStockFilter] = useState('all');
   const [profile, setProfile] = useState(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [view, setView] = useState('dashboard');
+  const [view, setView] = useState(() => (isOwner ? 'branches' : 'dashboard'));
   const [resv, setResv] = useState([]);
   const [item, setItem] = useState(blank);
   const [err, setErr] = useState('');
@@ -397,6 +397,13 @@ export default function Dashboard({ auth, socket, onLogout }) {
   }, []);
 
   useEffect(() => {
+    if (view === 'profile' && isOwner) {
+      if (branches.length === 0) loadBranches();
+      if (!profile) loadProfile();
+    }
+  }, [view, isOwner]);
+
+  useEffect(() => {
     if (!socket) return;
     const refresh = () => load().catch(e => setErr(e.message));
     const onTransferChange = () => {
@@ -422,10 +429,22 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
   const handleBranchChange = async (e) => {
     const nextBranchId = e.target.value;
+    if (!nextBranchId) return;
     setSelectedBranchId(nextBranchId);
     localStorage.setItem('pf_selected_branch_' + auth.id, nextBranchId);
     setItem(blank);
     await load(nextBranchId);
+    if (isOwner && view === 'branches') {
+      setView('dashboard');
+    }
+  };
+
+  const openBranchDashboard = (branchId, targetSubView = 'dashboard') => {
+    setSelectedBranchId(branchId);
+    localStorage.setItem('pf_selected_branch_' + auth.id, branchId);
+    setItem(blank);
+    load(branchId);
+    setView(targetSubView);
   };
 
   // Add Branch Handlers
@@ -1042,85 +1061,108 @@ export default function Dashboard({ auth, socket, onLogout }) {
         </div>
 
         <nav className="pharmacy-nav" aria-label="Pharmacy navigation">
-          <button
-            type="button"
-            className={view === 'dashboard' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
-            onClick={() => setView('dashboard')}
-          >
-            Dashboard
-          </button>
+          {isOwner ? (
+            <>
+              {(view === 'branches' || view === 'profile') && (
+                <button
+                  type="button"
+                  className={view === 'branches' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
+                  onClick={() => {
+                    setView('branches');
+                    loadBranches();
+                  }}
+                >
+                  Branches Overview
+                  {branches.length > 0 && <span className="nav-badge branch-nav-badge">{branches.length}</span>}
+                </button>
+              )}
 
-          <button
-            type="button"
-            className={view === 'reservations' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
-            onClick={() => {
-              setView('reservations');
-              load();
-            }}
-          >
-            Reservations
-            {pending > 0 && <span className="nav-badge">{pending}</span>}
-          </button>
+              {activeBranch && view !== 'branches' && view !== 'profile' && (
+                <>
+                  <button
+                    type="button"
+                    className={view === 'dashboard' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
+                    onClick={() => setView('dashboard')}
+                  >
+                    Inventory
+                  </button>
 
-          {isOwner && (
-            <button
-              type="button"
-              className={view === 'branches' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
-              onClick={() => {
-                setView('branches');
-                loadBranches();
-              }}
-            >
-              Branches
-              {branches.length > 0 && <span className="nav-badge branch-nav-badge">{branches.length}</span>}
-            </button>
+                  <button
+                    type="button"
+                    className={view === 'reservations' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
+                    onClick={() => {
+                      setView('reservations');
+                      load();
+                    }}
+                  >
+                    Reservations
+                    {pending > 0 && <span className="nav-badge">{pending}</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    className={view === 'transfers' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
+                    onClick={() => {
+                      setView('transfers');
+                      loadTransfers();
+                      loadAvailableStock();
+                    }}
+                  >
+                    Transfers
+                    {pendingTransfersCount > 0 && <span className="nav-badge transfer-nav-badge">{pendingTransfersCount}</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    className={view === 'branch-profile' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
+                    onClick={() => setView('branch-profile')}
+                  >
+                    Branch Profile
+                  </button>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className={view === 'dashboard' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
+                onClick={() => setView('dashboard')}
+              >
+                Dashboard
+              </button>
+
+              <button
+                type="button"
+                className={view === 'reservations' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
+                onClick={() => {
+                  setView('reservations');
+                  load();
+                }}
+              >
+                Reservations
+                {pending > 0 && <span className="nav-badge">{pending}</span>}
+              </button>
+
+              <button
+                type="button"
+                className={view === 'transfers' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
+                onClick={() => {
+                  setView('transfers');
+                  loadTransfers();
+                  loadAvailableStock();
+                }}
+              >
+                Transfers
+                {pendingTransfersCount > 0 && <span className="nav-badge transfer-nav-badge">{pendingTransfersCount}</span>}
+              </button>
+            </>
           )}
-
-          <button
-            type="button"
-            className={view === 'transfers' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
-            onClick={() => {
-              setView('transfers');
-              loadTransfers();
-              loadAvailableStock();
-            }}
-          >
-            Transfers
-            {pendingTransfersCount > 0 && <span className="nav-badge transfer-nav-badge">{pendingTransfersCount}</span>}
-          </button>
         </nav>
 
-        {/* Branch Selector (Owner) / Assigned Branch Display (Staff) */}
-        <div className="branch-selector-header">
-          {isOwner ? (
-            <div className="branch-selector-container">
-              <label htmlFor="pharmacy-branch-select" className="branch-selector-label">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-                  <circle cx="12" cy="10" r="3" />
-                </svg>
-                Branch:
-              </label>
-              <select
-                id="pharmacy-branch-select"
-                className="branch-selector-dropdown"
-                value={selectedBranchId || ''}
-                onChange={handleBranchChange}
-                disabled={loadingBranches}
-                aria-label="Select active pharmacy branch"
-              >
-                {branches.length === 0 ? (
-                  <option value="">Loading branches...</option>
-                ) : (
-                  branches.map(b => (
-                    <option key={b._id} value={b._id}>
-                      {b.name} {b.isMain ? '★ (Main)' : ''} {!b.isActive ? '(Inactive)' : ''}
-                    </option>
-                  ))
-                )}
-              </select>
-            </div>
-          ) : (
+        {/* Assigned Branch Display (Staff Only) */}
+        {isStaff && (
+          <div className="branch-selector-header">
             <div className="branch-locked-display" title="Assigned branch for your staff account">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
@@ -1129,8 +1171,8 @@ export default function Dashboard({ auth, socket, onLogout }) {
               <span className="branch-locked-name">{auth.branch?.name || 'Assigned Branch'}</span>
               <span className="branch-locked-badge">Staff Access</span>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         <div className="profile-menu-wrap" ref={profileMenuRef}>
           <button
@@ -1157,13 +1199,14 @@ export default function Dashboard({ auth, socket, onLogout }) {
                   setView('profile');
                   setProfileMenuOpen(false);
                   loadProfile();
+                  if (isOwner) loadBranches();
                 }}
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
                   <circle cx="12" cy="7" r="4" />
                 </svg>
-                My Profile
+                {isOwner ? 'Owner Profile' : 'My Profile'}
               </button>
 
               <button
@@ -1187,7 +1230,21 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
       {view === 'dashboard' && (
         <>
-          <div className="dashboard-head">
+          {isOwner && (
+            <div className="branch-top-nav-bar">
+              <button
+                type="button"
+                className="btn-back-branches"
+                onClick={() => {
+                  setView('branches');
+                  loadBranches();
+                }}
+              >
+                ← Back to Main Page
+              </button>
+            </div>
+          )}
+          <div className={`dashboard-head ${isOwner ? 'branch-dashboard-head' : ''}`}>
             <div>
               <p className="eyebrow">{isOwner ? 'PHARMACY OWNER DASHBOARD' : 'BRANCH STAFF DASHBOARD'}</p>
               <h1>{activeBranch?.name ? `${activeBranch.name} Inventory` : 'Manage your live inventory.'}</h1>
@@ -1469,14 +1526,29 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
       {view === 'reservations' && (
         <>
-          <div className="dashboard-head">
+          {isOwner && (
+            <div className="branch-top-nav-bar">
+              <button
+                type="button"
+                className="btn-back-branches"
+                onClick={() => {
+                  setView('branches');
+                  loadBranches();
+                }}
+              >
+                ← Back to Main Page
+              </button>
+            </div>
+          )}
+          <div className={`dashboard-head ${isOwner ? 'branch-dashboard-head' : ''}`}>
             <div>
-              <p className="eyebrow">PATIENT RESERVATIONS</p>
+              <p className="eyebrow">{isOwner ? 'PHARMACY OWNER DASHBOARD' : 'PATIENT RESERVATIONS'}</p>
               <h1>{activeBranch?.name ? `${activeBranch.name} Reservations` : 'Manage Medicine Requests'}</h1>
               {activeBranch && (
                 <p className="branch-active-subtitle">
                   <span>📍 {activeBranch.address}</span>
                   {activeBranch.isMain && <span className="badge-main-branch">★ Main Branch</span>}
+                  {activeBranch.phone && <span>• 📞 {activeBranch.phone}</span>}
                 </p>
               )}
             </div>
@@ -1616,13 +1688,17 @@ export default function Dashboard({ auth, socket, onLogout }) {
         <>
           <div className="dashboard-head">
             <div>
-              <p className="eyebrow">PHARMACY BRANCH MANAGEMENT</p>
-              <h1>Branch Locations</h1>
+              <p className="eyebrow">PHARMACY OWNER DASHBOARD</p>
+              <h1>Pharmacy Branches Overview</h1>
               <p className="branch-active-subtitle">
-                Manage physical pharmacy branches, locations, and view individual branch inventory.
+                Select a branch to manage its live inventory, reservations, transfers, and branch profile.
               </p>
             </div>
-            <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+              <div className="branches-total-pill">
+                <span>Total Branches:</span>
+                <strong>{branches.length}</strong>
+              </div>
               <button
                 type="button"
                 className="btn-add-branch"
@@ -1631,7 +1707,8 @@ export default function Dashboard({ auth, socket, onLogout }) {
                   setAddBranchForm({ name: '', phone: '', address: '' });
                   setAddBranchCoords(null);
                   setAddBranchErr('');
-                  setAddBranchGeocodeMsg('');
+                  setAddBranchGeocodeMsg({ type: '', text: '' });
+                  setAddBranchSuggestions([]);
                 }}
               >
                 + Add Branch
@@ -1674,7 +1751,14 @@ export default function Dashboard({ auth, socket, onLogout }) {
                   const coords = parseCoordinates(b.location);
 
                   return (
-                    <article key={b._id} className={`branch-card ${isSelected ? 'is-active-branch' : ''}`}>
+                    <article
+                      key={b._id}
+                      className={`branch-card clickable-branch-card ${isSelected ? 'is-active-branch' : ''}`}
+                      onClick={(e) => {
+                        if (e.target.closest('button') || e.target.closest('a')) return;
+                        openBranchDashboard(b._id, 'dashboard');
+                      }}
+                    >
                       <div>
                         <div className="branch-card-header">
                           <h3 className="branch-card-title">{b.name}</h3>
@@ -1702,6 +1786,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                                     href={`https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lng}`}
                                     target="_blank"
                                     rel="noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
                                   >
                                     View on Google Maps ↗
                                   </a>
@@ -1718,27 +1803,24 @@ export default function Dashboard({ auth, socket, onLogout }) {
                       </div>
 
                       <div className="branch-card-actions">
-                        {isSelected ? (
-                          <span className="current-branch-tag">✓ Active Branch</span>
-                        ) : (
-                          <button
-                            type="button"
-                            className="btn-select-branch"
-                            onClick={() => {
-                              setSelectedBranchId(b._id);
-                              localStorage.setItem('pf_selected_branch_' + auth.id, b._id);
-                              load(b._id);
-                              setView('dashboard');
-                            }}
-                          >
-                            View Inventory →
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          className="btn-select-branch"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openBranchDashboard(b._id, 'dashboard');
+                          }}
+                        >
+                          Open Branch Dashboard →
+                        </button>
 
                         <button
                           type="button"
                           className="btn-edit-branch"
-                          onClick={() => openEditBranchModal(b)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditBranchModal(b);
+                          }}
                         >
                           Edit Branch
                         </button>
@@ -1754,15 +1836,31 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
       {view === 'transfers' && (
         <>
-          <div className="dashboard-head">
+          {isOwner && (
+            <div className="branch-top-nav-bar">
+              <button
+                type="button"
+                className="btn-back-branches"
+                onClick={() => {
+                  setView('branches');
+                  loadBranches();
+                }}
+              >
+                ← Back to Main Page
+              </button>
+            </div>
+          )}
+          <div className={`dashboard-head ${isOwner ? 'branch-dashboard-head' : ''}`}>
             <div>
-              <p className="eyebrow">INTER-BRANCH MEDICINE TRANSFERS</p>
-              <h1>Stock Transfer Requests</h1>
-              <p className="branch-active-subtitle">
-                {isOwner
-                  ? `Active Requesting Branch: ${activeBranch?.name || 'Selected Branch'} (requests will be delivered to this branch)`
-                  : `Your Assigned Branch: ${auth.branch?.name || 'Assigned Branch'} (requests will be delivered to this branch)`}
-              </p>
+              <p className="eyebrow">{isOwner ? 'PHARMACY OWNER DASHBOARD' : 'INTER-BRANCH MEDICINE TRANSFERS'}</p>
+              <h1>{activeBranch?.name ? `${activeBranch.name} Transfers` : 'Stock Transfer Requests'}</h1>
+              {activeBranch && (
+                <p className="branch-active-subtitle">
+                  <span>📍 {activeBranch.address}</span>
+                  {activeBranch.isMain && <span className="badge-main-branch">★ Main Branch</span>}
+                  {activeBranch.phone && <span>• 📞 {activeBranch.phone}</span>}
+                </p>
+              )}
             </div>
             <div className="reservations-meta-stats">
               <span className="reservations-count-pill">
@@ -2333,45 +2431,356 @@ export default function Dashboard({ auth, socket, onLogout }) {
         </>
       )}
 
+      {view === 'branch-profile' && isOwner && (
+        <>
+          <div className="branch-top-nav-bar">
+            <button
+              type="button"
+              className="btn-back-branches"
+              onClick={() => {
+                setView('branches');
+                loadBranches();
+              }}
+            >
+              ← Back to Main Page
+            </button>
+          </div>
+          <div className="dashboard-head branch-dashboard-head">
+            <div>
+              <p className="eyebrow">PHARMACY OWNER DASHBOARD</p>
+              <h1>{activeBranch?.name ? `${activeBranch.name} Profile` : 'Branch Details'}</h1>
+              {activeBranch && (
+                <p className="branch-active-subtitle">
+                  <span>📍 {activeBranch.address}</span>
+                  {activeBranch.isMain && <span className="badge-main-branch">★ Main Branch</span>}
+                  {activeBranch.phone && <span>• 📞 {activeBranch.phone}</span>}
+                </p>
+              )}
+            </div>
+            <div>
+              <button
+                type="button"
+                className="btn-edit-branch"
+                onClick={() => activeBranch && openEditBranchModal(activeBranch)}
+              >
+                Edit Branch Details
+              </button>
+            </div>
+          </div>
+
+          <main className="content-wrap branch-profile-view">
+
+            {activeBranch ? (
+              <section className="profile-section-card">
+                <div className="section-card-header">
+                  <span className="section-icon" aria-hidden="true">🏥</span>
+                  <div>
+                    <h2>Branch Information</h2>
+                    <p className="section-subtitle">Registered physical facility details for this branch</p>
+                  </div>
+                </div>
+
+                <div className="section-card-body">
+                  <div className="info-field">
+                    <span className="info-label">Branch Name</span>
+                    <span className="info-value name-highlight">{activeBranch.name}</span>
+                  </div>
+
+                  <div className="info-field">
+                    <span className="info-label">Branch Type</span>
+                    <span className="info-value">
+                      {activeBranch.isMain ? '★ Main Branch (Primary Headquarters)' : 'Secondary Branch'}
+                    </span>
+                  </div>
+
+                  <div className="info-field">
+                    <span className="info-label">Operating Status</span>
+                    <span className="info-value">
+                      <span className={`badge-active-status ${activeBranch.isActive !== false ? 'active' : 'inactive'}`}>
+                        {activeBranch.isActive !== false ? 'Active & Open' : 'Inactive'}
+                      </span>
+                    </span>
+                  </div>
+
+                  <div className="info-field">
+                    <span className="info-label">Contact Phone</span>
+                    <span className="info-value">{activeBranch.phone || 'Not specified'}</span>
+                  </div>
+
+                  <div className="info-field">
+                    <span className="info-label">Branch Address</span>
+                    <div className="address-display-box">
+                      <p className="info-value address-text">{activeBranch.address}</p>
+                      <button
+                        type="button"
+                        className="edit-address-button"
+                        onClick={() => openEditBranchModal(activeBranch)}
+                      >
+                        Edit Address
+                      </button>
+                    </div>
+                  </div>
+
+                  {activeBranch.location && parseCoordinates(activeBranch.location) && (
+                    <div className="info-field">
+                      <span className="info-label">Location Mapping</span>
+                      <div className="map-integration-box">
+                        <span className="coordinates-tag">
+                          📍 {parseCoordinates(activeBranch.location).lat.toFixed(6)}° N, {parseCoordinates(activeBranch.location).lng.toFixed(6)}° E
+                        </span>
+                        <a
+                          className="map-link-btn"
+                          href={`https://www.google.com/maps/dir/?api=1&destination=${parseCoordinates(activeBranch.location).lat},${parseCoordinates(activeBranch.location).lng}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open in Google Maps ↗
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </section>
+            ) : (
+              <div className="empty empty-state-box">
+                <p>No branch selected. Please return to the branch list.</p>
+              </div>
+            )}
+          </main>
+        </>
+      )}
+
 {view === 'profile' && (
   <main className="content-wrap pharmacy-profile-view">
     <div className="profile-page-nav">
       <button
         type="button"
         className="back-button"
-        onClick={() => setView('dashboard')}
+        onClick={() => setView(isOwner ? 'branches' : 'dashboard')}
       >
         ← Back to Dashboard
       </button>
-      <span className="profile-breadcrumb">Pharmacy Portal / Account Profile</span>
+      <span className="profile-breadcrumb">
+        {isOwner ? 'Pharmacy Portal / Owner Profile' : 'Pharmacy Portal / Account Profile'}
+      </span>
     </div>
 
     {err && <p className="note">{err}</p>}
 
-    {/* Profile Header Hero */}
-    <section className="pharmacy-profile-hero">
-      <div className="hero-avatar-wrap">
-        <span className="pharmacy-hero-avatar">
-          {(profile?.name || auth.name || 'P').trim().charAt(0).toUpperCase()}
-        </span>
-      </div>
+    {isOwner ? (
+      <>
+        {/* Owner Profile Header Hero */}
+        <section className="pharmacy-profile-hero">
+          <div className="hero-avatar-wrap">
+            <span className="pharmacy-hero-avatar">
+              {(profile?.ownerName || profile?.name || auth.name || 'O').trim().charAt(0).toUpperCase()}
+            </span>
+          </div>
 
-      <div className="hero-meta-wrap">
-        <span className="pharmacy-account-badge">
-          <span className="badge-status-dot" aria-hidden="true"></span>
-          Pharmacy Account
-        </span>
-        <h1 className="pharmacy-hero-title">{profile?.name || auth.name}</h1>
-        <p className="pharmacy-hero-subtitle">
-          {profile?.createdAt
-            ? `Member pharmacy since ${new Date(profile.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`
-            : 'PharmaTrack Partner Pharmacy'}
-        </p>
-      </div>
-    </section>
+          <div className="hero-meta-wrap">
+            <span className="pharmacy-account-badge">
+              <span className="badge-status-dot" aria-hidden="true"></span>
+              Pharmacy Owner Account
+            </span>
+            <h1 className="pharmacy-hero-title">
+              {profile?.ownerName && profile.ownerName.trim() ? profile.ownerName.trim() : (profile?.name || auth.name)}
+            </h1>
+            <p className="pharmacy-hero-subtitle">
+              {profile?.name ? `Owner & Administrator of ${profile.name}` : 'Pharmacy Owner'}
+              {profile?.createdAt && ` • Registered since ${new Date(profile.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`}
+            </p>
+          </div>
+        </section>
 
-    {/* Profile Details Sections Grid */}
-    <div className="pharmacy-profile-sections">
+        {/* Owner Profile Sections */}
+        <div className="pharmacy-profile-sections">
+          {/* 1. Owner & Account Details Card */}
+          <section className="profile-section-card">
+            <div className="section-card-header">
+              <span className="section-icon" aria-hidden="true">👤</span>
+              <div>
+                <h2>Owner &amp; Account Details</h2>
+                <p className="section-subtitle">Authenticated pharmacy owner profile and business credentials</p>
+              </div>
+            </div>
+
+            <div className="section-card-body">
+              <div className="info-field">
+                <span className="info-label">Owner Name</span>
+                <span className="info-value">
+                  {profile?.ownerName && profile.ownerName.trim() ? (
+                    <strong>{profile.ownerName.trim()}</strong>
+                  ) : (
+                    <span className="muted" style={{ fontStyle: 'italic' }}>Not provided</span>
+                  )}
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Pharmacy / Business Name</span>
+                <span className="info-value name-highlight">
+                  {profile?.name || auth.name || 'Not specified'}
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Email Address</span>
+                <span className="info-value contact-value">
+                  <span className="field-icon" aria-hidden="true">✉️</span>
+                  {profile?.email || auth.email || 'Not specified'}
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Contact Number</span>
+                <span className="info-value contact-value">
+                  <span className="field-icon" aria-hidden="true">📞</span>
+                  {profile?.phone && profile.phone.trim() ? (
+                    profile.phone.trim()
+                  ) : (
+                    <span className="muted" style={{ fontStyle: 'italic' }}>Not provided</span>
+                  )}
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Account Role</span>
+                <span className="role-tag">Pharmacy Owner &amp; Administrator</span>
+              </div>
+            </div>
+          </section>
+
+          {/* 2. My Pharmacy Branches Card */}
+          <section className="profile-section-card" style={{ gridColumn: '1 / -1' }}>
+            <div className="section-card-header">
+              <span className="section-icon" aria-hidden="true">🏥</span>
+              <div>
+                <h2>My Pharmacy Branches</h2>
+                <p className="section-subtitle">
+                  All registered branch locations belonging to this pharmacy business
+                </p>
+              </div>
+              <span className="branches-total-pill" style={{ marginLeft: 'auto' }}>
+                <span>Total Branches:</span>
+                <strong>{branches.length}</strong>
+              </span>
+            </div>
+
+            <div className="section-card-body">
+              {loadingBranches ? (
+                <div className="loading-state-box">
+                  <span className="loading-spinner" aria-hidden="true" />
+                  <span>Loading registered branches...</span>
+                </div>
+              ) : branchListErr ? (
+                <p className="note">{branchListErr}</p>
+              ) : branches.length === 0 ? (
+                <div className="empty empty-state-box">
+                  <p className="empty-state-desc">No branches registered yet.</p>
+                </div>
+              ) : (
+                <div className="profile-branches-list">
+                  {branches.map(b => {
+                    const coords = parseCoordinates(b.location);
+                    return (
+                      <div key={b._id} className="profile-branch-item">
+                        <div className="profile-branch-header">
+                          <div className="profile-branch-title-group">
+                            <span aria-hidden="true">📍</span>
+                            <h3>{b.name}</h3>
+                          </div>
+                          <div className="branch-badges-group">
+                            {b.isMain ? (
+                              <span className="badge-main-branch">★ Main Branch</span>
+                            ) : (
+                              <span className="badge-secondary-branch">Secondary Branch</span>
+                            )}
+                            <span className={`badge-active-status ${b.isActive !== false ? 'active' : 'inactive'}`}>
+                              {b.isActive !== false ? 'Active' : 'Inactive'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="profile-branch-grid">
+                          <div className="info-field">
+                            <span className="info-label">Full Saved Address</span>
+                            <span className="info-value address-text">
+                              {b.address || 'Address not specified'}
+                            </span>
+                          </div>
+
+                          <div className="info-field">
+                            <span className="info-label">Contact Number</span>
+                            <span className="info-value contact-value">
+                              <span className="field-icon" aria-hidden="true">📞</span>
+                              {b.phone && b.phone.trim() ? (
+                                b.phone.trim()
+                              ) : (
+                                <span className="muted" style={{ fontStyle: 'italic' }}>Not provided</span>
+                              )}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="info-field">
+                          <span className="info-label">Saved Coordinates &amp; Map Location</span>
+                          <div className="map-integration-box">
+                            {coords ? (
+                              <>
+                                <span className="coordinates-tag">
+                                  📍 Lat: {coords.lat.toFixed(6)}, Lng: {coords.lng.toFixed(6)}
+                                </span>
+                                <a
+                                  className="map-link-btn"
+                                  href={`https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lng}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  View on Google Maps ↗
+                                </a>
+                              </>
+                            ) : (
+                              <span className="muted" style={{ fontStyle: 'italic' }}>
+                                Coordinates not available
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      </>
+    ) : (
+      <>
+        {/* Profile Header Hero */}
+        <section className="pharmacy-profile-hero">
+          <div className="hero-avatar-wrap">
+            <span className="pharmacy-hero-avatar">
+              {(profile?.name || auth.name || 'P').trim().charAt(0).toUpperCase()}
+            </span>
+          </div>
+
+          <div className="hero-meta-wrap">
+            <span className="pharmacy-account-badge">
+              <span className="badge-status-dot" aria-hidden="true"></span>
+              Pharmacy Account
+            </span>
+            <h1 className="pharmacy-hero-title">{profile?.name || auth.name}</h1>
+            <p className="pharmacy-hero-subtitle">
+              {profile?.createdAt
+                ? `Member pharmacy since ${new Date(profile.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`
+                : 'PharmaTrack Partner Pharmacy'}
+            </p>
+          </div>
+        </section>
+
+        {/* Profile Details Sections Grid */}
+        <div className="pharmacy-profile-sections">
       {/* 1. Pharmacy Information */}
       <section className="profile-section-card">
         <div className="section-card-header">
@@ -2640,6 +3049,8 @@ export default function Dashboard({ auth, socket, onLogout }) {
         </div>
       </section>
     </div>
+    </>
+  )}
   </main>
 )}
 

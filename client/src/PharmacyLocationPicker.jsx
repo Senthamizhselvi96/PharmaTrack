@@ -66,7 +66,8 @@ function MapPositionUpdater({ position }) {
 
 export default function PharmacyLocationPicker({
   position,
-  onChange
+  onChange,
+  readOnly = false
 }) {
   const defaultCenter = [13.0827, 80.2707];
 
@@ -91,7 +92,7 @@ export default function PharmacyLocationPicker({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        <MapClickHandler onChange={onChange} />
+        {!readOnly && onChange && <MapClickHandler onChange={onChange} />}
 
         <MapPositionUpdater position={position} />
 
@@ -99,31 +100,46 @@ export default function PharmacyLocationPicker({
           <Marker
             position={[Number(position.lat), Number(position.lng)]}
             icon={pharmacyIcon}
-            draggable
-            eventHandlers={{
-              dragend(e) {
-                const point = e.target.getLatLng();
-                if (point && Number.isFinite(point.lat) && Number.isFinite(point.lng)) {
-                  onChange({
-                    lat: Number(point.lat),
-                    lng: Number(point.lng)
-                  });
-                }
-              }
-            }}
+            draggable={!readOnly}
+            eventHandlers={
+              !readOnly && onChange
+                ? {
+                    dragend(e) {
+                      const point = e.target.getLatLng();
+                      if (point && Number.isFinite(point.lat) && Number.isFinite(point.lng)) {
+                        onChange({
+                          lat: Number(point.lat),
+                          lng: Number(point.lng)
+                        });
+                      }
+                    }
+                  }
+                : {}
+            }
           />
         )}
       </MapContainer>
 
-      {hasValidPosition ? (
+      {readOnly ? (
+        hasValidPosition ? (
+          <p className="muted" style={{ marginTop: '8px', fontSize: '0.9rem' }}>
+            📍 Saved coordinates: {Number(position.lat).toFixed(6)}, {Number(position.lng).toFixed(6)}
+          </p>
+        ) : (
+          <p className="muted" style={{ marginTop: '8px', fontSize: '0.9rem' }}>
+            No coordinates currently set for this address. Click &ldquo;Edit Address&rdquo; to set location.
+          </p>
+        )
+      ) : hasValidPosition ? (
         <p className="muted" style={{ marginTop: '8px', fontSize: '0.9rem' }}>
           Selected coordinates: {Number(position.lat).toFixed(6)}, {Number(position.lng).toFixed(6)}
         </p>
       ) : (
         <p className="muted" style={{ marginTop: '8px', fontSize: '0.9rem' }}>
-          Click on the map or drag the marker to choose exact pharmacy coordinates.
+          Click on the map or drag the marker to choose exact coordinates.
         </p>
       )}
     </div>
   );
 }
+

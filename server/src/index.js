@@ -1588,21 +1588,41 @@ app.put('/api/patient/profile', auth(['patient']), wrap(async (req, res) => {
   }
 
   const cleanAddress = String(address).trim();
+  const coords = extractCoordinates(req.body);
 
-  // Convert the new address into new coordinates using OpenStreetMap Nominatim
-  const location = await geocodeAddress(cleanAddress, 'patient');
-  const latNum = Number(location.lat);
-  const lngNum = Number(location.lng);
+  let latNum;
+  let lngNum;
 
-  if (
-    !Number.isFinite(latNum) ||
-    !Number.isFinite(lngNum) ||
-    latNum < -90 ||
-    latNum > 90 ||
-    lngNum < -180 ||
-    lngNum > 180
-  ) {
-    throw new Error('Could not determine valid coordinates from the address');
+  if (coords && Array.isArray(coords) && coords.length === 2) {
+    lngNum = Number(coords[0]);
+    latNum = Number(coords[1]);
+
+    if (
+      !Number.isFinite(latNum) ||
+      !Number.isFinite(lngNum) ||
+      latNum < -90 ||
+      latNum > 90 ||
+      lngNum < -180 ||
+      lngNum > 180
+    ) {
+      throw new Error('Valid coordinates are required (latitude between -90 and 90, longitude between -180 and 180)');
+    }
+  } else {
+    // Convert the new address into new coordinates using OpenStreetMap Nominatim
+    const location = await geocodeAddress(cleanAddress, 'patient');
+    latNum = Number(location.lat);
+    lngNum = Number(location.lng);
+
+    if (
+      !Number.isFinite(latNum) ||
+      !Number.isFinite(lngNum) ||
+      latNum < -90 ||
+      latNum > 90 ||
+      lngNum < -180 ||
+      lngNum > 180
+    ) {
+      throw new Error('Could not determine valid coordinates from the address. Please select a valid location on the map.');
+    }
   }
 
   const patient = await Patient.findByIdAndUpdate(

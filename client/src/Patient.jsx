@@ -1,12 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
+import PharmacyLocationPicker from './PharmacyLocationPicker.jsx';
+import { searchAddressWithFallback } from './geocoding.js';
 
+const parseCoordinates = (loc) => {
+  if (loc?.coordinates && Array.isArray(loc.coordinates) && loc.coordinates.length === 2) {
+    const [lng, lat] = loc.coordinates;
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      return { lat, lng };
+    }
+  }
+  return null;
+};
 
 export default function Patient({ auth, socket, onLogout }) {
   const [profile, setProfile] = useState(null);
   const [addressSaved, setAddressSaved] = useState(false);
   const [savingAddress, setSavingAddress] = useState(false);
   const [profileMsg, setProfileMsg] = useState({ type: '', text: '' });
+  const [editingAddress, setEditingAddress] = useState(false);
+  const [typedAddress, setTypedAddress] = useState('');
+  const [selectedLocation, setSelectedLocation] = useState(null);
+  const [addressNeedsResolution, setAddressNeedsResolution] = useState(false);
+  const [resolvingAddress, setResolvingAddress] = useState(false);
+  const [geocodeMsg, setGeocodeMsg] = useState('');
+  const [addressSuggestions, setAddressSuggestions] = useState([]);
   const [q, setQ] = useState('');
   const [locationMode, setLocationMode] = useState('current'); // 'current' | 'registered'
   const [pos, setPos] = useState(null);
@@ -211,6 +229,10 @@ export default function Patient({ auth, socket, onLogout }) {
     try {
       const data = await api('/patient/profile', { token });
       setProfile(data);
+      if (!editingAddress) {
+        setTypedAddress(data?.address || '');
+        setSelectedLocation(parseCoordinates(data?.location));
+      }
       // Seamlessly initialize with registered location if address is present and no location set
       if (data?.address?.trim() && !currentPosRef.current) {
         try {
@@ -227,6 +249,199 @@ export default function Patient({ auth, socket, onLogout }) {
     } catch (e) {
       setMsg(e.message);
     }
+  };
+
+  const handleStartEditAddress = () => {
+    setEditingAddress(true);
+    setTypedAddress(profile?.address || '');
+    setSelectedLocation(parseCoordinates(profile?.location));
+    setAddressNeedsResolution(false);
+    setProfileMsg({ type: '', text: '' });
+    setGeocodeMsg('');
+    setAddressSuggestions([]);
+  };
+
+  const handleAddressInputChange = (e) => {
+    const nextVal = e.target.value;
+    setTypedAddress(nextVal);
+    setProfileMsg({ type: '', text: '' });
+    setGeocodeMsg('');
+    setAddressSuggestions([]);
+
+    const currentSaved = String(profile?.address || '').trim();
+    if (nextVal.trim() !== currentSaved) {
+      setAddressNeedsResolution(true);
+      // Never silently retain old coordinates when the address changes
+      setSelectedLocation(null);
+    } else {
+      setAddressNeedsResolution(false);
+      setSelectedLocation(parseCoordinates(profile?.location));
+    }
+  };
+
+  const handleFindOnMap = async () => {
+    const clean = String(typedAddress || '').trim();
+    if (!clean) {
+      setProfileMsg({ type: 'error', text: 'Please enter an address to find on the map.' });
+      return;
+    }
+
+    setResolvingAddress(true);
+    setProfileMsg({ type: '', text: '' });
+    setGeocodeMsg('');
+    setAddressSuggestions([]);
+
+    try {
+      const outcome = await searchAddressWithFallback(clean);
+      if (!outcome.success || !outcome.results || outcome.results.length === 0) {
+        setSelectedLocation(null);
+        setAddressNeedsResolution(true);
+        setGeocodeMsg(
+          'Could not find this address on the map. Please refine the address or click the map directly to choose your location.'
+        );
+        return;
+      }
+
+      setAddressSuggestions(outcome.results);
+      const top = outcome.results[0];
+      const nextPos = { lat: top.lat, lng: top.lng };
+      setSelectedLocation(nextPos);
+      setAddressNeedsResolution(false);
+
+      if (top.precision === 'exact') {
+        setGeocodeMsg('✓ Exact location found and pinned on the map.');
+      } else {
+        setGeocodeMsg(
+          `📍 Found location for "${top.matchedQuery}". Drag the marker or click the map if you wish to adjust the exact location.`
+        );
+      }
+    } catch {
+      setSelectedLocation(null);
+      setAddressNeedsResolution(true);
+      setGeocodeMsg('Address search failed. Please click on the map directly to choose your location.');
+    } finally {
+      setResolvingAddress(false);
+    }
+  };
+
+  const handleLocationChange = (coords) => {
+    if (!coords || !Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) return;
+    const lat = Number(coords.lat);
+    const lng = Number(coords.lng);
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
+
+    setSelectedLocation({ lat, lng });
+    setAddressNeedsResolution(false);
+    setGeocodeMsg(`📍 Map location set to: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+    setProfileMsg({ type: '', text: '' });
+  };
+
+  const handleSelectSuggestion = (item) => {
+    setSelectedLocation({ lat: item.lat, lng: item.lng });
+    setAddressNeedsResolution(false);
+    setGeocodeMsg(`📍 Selected: ${item.matchedQuery}. You can refine by dragging the marker.`);
+    setAddressSuggestions([]);
+  };
+
+  const handleSaveAddress = async () => {
+    if (savingAddress) return;
+    setProfileMsg({ type: '', text: '' });
+
+    const cleanAddress = String(typedAddress || '').trim();
+    if (!cleanAddress) {
+      setProfileMsg({ type: 'error', text: 'Address is required.' });
+      return;
+    }
+
+    if (addressNeedsResolution || !selectedLocation) {
+      setProfileMsg({
+        type: 'error',
+        text: 'The address could not be resolved or coordinates are missing. Please click "Find on Map" or select a valid location on the map before saving.'
+      });
+      return;
+    }
+
+    const lat = Number(selectedLocation.lat);
+    const lng = Number(selectedLocation.lng);
+
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      lat < -90 ||
+      lat > 90 ||
+      lng < -180 ||
+      lng > 180
+    ) {
+      setProfileMsg({
+        type: 'error',
+        text: 'Invalid coordinates. Please select a valid location on the map.'
+      });
+      return;
+    }
+
+    try {
+      setSavingAddress(true);
+      setAddressSaved(false);
+
+      const updated = await api('/patient/profile', {
+        method: 'PUT',
+        token,
+        body: {
+          address: cleanAddress,
+          coordinates: [lng, lat]
+        }
+      });
+
+      // Update state with confirmed MongoDB values
+      setProfile(updated);
+      setEditingAddress(false);
+      setAddressNeedsResolution(false);
+      setAddressSuggestions([]);
+      setGeocodeMsg('');
+
+      // Update cached coordinates reference
+      registeredCoordsRef.current = {
+        address: cleanAddress,
+        coords: { lat, lng }
+      };
+
+      // Ensure nearby search uses the updated coordinates
+      if (locationMode === 'registered' || !pos) {
+        setPos({ lat, lng });
+        setLocStatus('registered');
+        if (lastQuery.current) {
+          runSearch(lastQuery.current, false, { lat, lng });
+        }
+      }
+
+      setAddressSaved(true);
+      setProfileMsg({
+        type: 'success',
+        text: 'Address and location updated successfully.'
+      });
+
+      setTimeout(() => {
+        setAddressSaved(false);
+        setProfileMsg(m => (m.type === 'success' ? { type: '', text: '' } : m));
+      }, 4000);
+    } catch (err) {
+      setProfileMsg({
+        type: 'error',
+        text: err.message || 'Failed to update address.'
+      });
+    } finally {
+      setSavingAddress(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingAddress(false);
+    setAddressNeedsResolution(false);
+    setTypedAddress(profile?.address || '');
+    setSelectedLocation(parseCoordinates(profile?.location));
+    setAddressSuggestions([]);
+    setGeocodeMsg('');
+    setProfileMsg({ type: '', text: '' });
   };
 
   useEffect(() => {
@@ -706,75 +921,129 @@ export default function Patient({ auth, socket, onLogout }) {
     <strong>Phone:</strong> {profile.phone}
   </p>
 
-  <label className="profile-edit-field">
-    <strong>Address</strong>
-    <input
-      type="text"
-      value={profile.address || ''}
-      onChange={e => {
-        setProfileMsg({ type: '', text: '' });
-        setProfile(p => ({
-          ...p,
-          address: e.target.value
-        }));
-      }}
-      placeholder="Enter your address"
-    />
-  </label>
+          {!editingAddress ? (
+            <div className="profile-edit-field">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <strong>Address & Location</strong>
+                <button
+                  type="button"
+                  className="edit-address-button"
+                  onClick={handleStartEditAddress}
+                >
+                  Edit Address
+                </button>
+              </div>
 
- <button
-  type="button"
-  className="save-profile-button"
-  disabled={savingAddress}
-  onClick={async () => {
-  if (savingAddress) return;
-  try {
-    setSavingAddress(true);
-    setMsg('');
-    setProfileMsg({ type: '', text: '' });
-    setAddressSaved(false);
+              <div className="address-display-box" style={{ marginBottom: '14px' }}>
+                <p className="address-text">
+                  {profile.address || 'No registered address set.'}
+                </p>
+              </div>
 
-    const updated = await api('/patient/profile', {
-      method: 'PUT',
-      token,
-      body: { address: profile.address || '' }
-    });
+              <PharmacyLocationPicker
+                position={parseCoordinates(profile.location)}
+                readOnly={true}
+              />
+            </div>
+          ) : (
+            <div className="profile-edit-field">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <strong>Edit Address & Location</strong>
+              </div>
 
-    registeredCoordsRef.current = null;
+              <div className="address-input-row">
+                <input
+                  type="text"
+                  value={typedAddress}
+                  onChange={handleAddressInputChange}
+                  placeholder="Enter your address"
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className="find-on-map-button"
+                  disabled={resolvingAddress || !typedAddress.trim()}
+                  onClick={handleFindOnMap}
+                  title="Search address on map"
+                >
+                  {resolvingAddress ? 'Searching…' : '🔍 Find on Map'}
+                </button>
+              </div>
 
-    // Refresh the patient profile from the backend after saving so displayed address matches MongoDB
-    await loadProfile();
+              {addressNeedsResolution && (
+                <small className="hint" style={{ display: 'block', marginTop: '6px', color: '#b54708', fontWeight: '500' }}>
+                  ⚠️ Address modified. Click &ldquo;Find on Map&rdquo; to locate it or select your location on the map before saving.
+                </small>
+              )}
 
-    setAddressSaved(true);
-    setProfileMsg({ type: 'success', text: 'Address and location updated successfully.' });
+              {resolvingAddress && (
+                <small className="hint" style={{ display: 'block', marginTop: '6px' }}>
+                  🔍 Looking up coordinates for the entered address…
+                </small>
+              )}
 
-    if (locationMode === 'registered') {
-      try {
-        const coords = await resolveRegisteredLocation(updated);
-        if (coords) {
-          setPos(coords);
-          setLocStatus('registered');
-          if (lastQuery.current) runSearch(lastQuery.current, false, coords);
-        }
-      } catch {
-        setPos(null);
-        setLocStatus('invalid_registered');
-      }
-    }
+              {geocodeMsg && (
+                <p className="note" style={{ marginTop: '8px', marginBottom: '8px' }}>
+                  {geocodeMsg}
+                </p>
+              )}
 
-    setTimeout(() => {
-      setAddressSaved(false);
-      setProfileMsg(m => m.type === 'success' ? { type: '', text: '' } : m);
-    }, 4000);
-  } catch (e) {
-    setProfileMsg({ type: 'error', text: e.message || 'Failed to update address.' });
-  } finally {
-    setSavingAddress(false);
-  }
-}}
->
-  {savingAddress ? 'Saving address…' : 'Save address'}
-</button>
+              {addressSuggestions.length > 1 && (
+                <div className="address-suggestions-container" style={{ marginTop: '8px', marginBottom: '12px' }}>
+                  <span className="suggestions-title" style={{ fontSize: '0.82rem', color: 'var(--muted)', display: 'block', marginBottom: '4px' }}>
+                    Did you mean:
+                  </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    {addressSuggestions.slice(0, 3).map((item, idx) => (
+                      <button
+                        key={item.id || idx}
+                        type="button"
+                        className="suggestion-item-btn"
+                        style={{
+                          textAlign: 'left',
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          border: '1px solid var(--line)',
+                          background: '#fff',
+                          cursor: 'pointer',
+                          fontSize: '0.85rem'
+                        }}
+                        onClick={() => handleSelectSuggestion(item)}
+                      >
+                        📍 {item.displayName}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ marginTop: '12px', marginBottom: '12px' }}>
+                <PharmacyLocationPicker
+                  position={selectedLocation}
+                  onChange={handleLocationChange}
+                />
+              </div>
+
+              <div className="address-actions">
+                <button
+                  type="button"
+                  className="save-profile-button"
+                  disabled={savingAddress || resolvingAddress}
+                  onClick={handleSaveAddress}
+                >
+                  {savingAddress ? 'Saving address…' : 'Save Address'}
+                </button>
+                <button
+                  type="button"
+                  className="cancel-address-button"
+                  disabled={savingAddress || resolvingAddress}
+                  onClick={handleCancelEdit}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
   {profileMsg.text && (
     <div
