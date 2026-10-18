@@ -6,7 +6,7 @@ import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { Server } from 'socket.io';
-import { Patient, Pharmacy, Stock, Reservation, Branch, Staff, TransferRequest } from './models/index.js';
+import { Patient, Pharmacy, Stock, Reservation, Branch, Staff, TransferRequest, ActivityLog } from './models/index.js';
 import {
   ensureMainBranchForPharmacy,
   getOwnerBranches,
@@ -16,6 +16,7 @@ import {
   getBranchStaff,
   authenticateStaff
 } from './services/branchService.js';
+import { resolveActorInfo, logActivity, getActivityLogs } from './services/activityLogService.js';
 import axios from 'axios';
 
 for (const key of ['MONGO_URI', 'JWT_SECRET']) {
@@ -415,6 +416,10 @@ app.post('/api/auth/staff/login', wrap(async (req, res) => {
   });
 }));
 
+app.post('/api/auth/staff/register', wrap(async (req, res) => {
+  throw httpError(403, 'Public staff registration is disabled. Staff accounts must be created by the pharmacy owner.');
+}));
+
 // ---------- Pharmacy inventory ----------
 app.get('/api/pharmacy/stock', auth(['pharmacy', 'staff']), wrap(async (req, res) => {
   if (req.role === 'staff') {
@@ -481,6 +486,8 @@ app.put('/api/pharmacy/stock', auth(['pharmacy', 'staff']), wrap(async (req, res
   }
 
   const cleanMed = String(medicine).trim();
+  const existingStock = await Stock.findOne({ branch: targetBranchId, medicine: cleanMed });
+
   const stock = await Stock.findOneAndUpdate(
     { branch: targetBranchId, medicine: cleanMed },
     {
@@ -496,6 +503,39 @@ app.put('/api/pharmacy/stock', auth(['pharmacy', 'staff']), wrap(async (req, res
   );
 
   emitInventory(stock);
+
+  // Activity Audit Log
+  const actor = await resolveActorInfo(req);
+  let actionType = 'medicine_added';
+  let description = `${actor.displayName} added ${cleanMed} (${qty} units) to branch inventory`;
+  if (existingStock) {
+    if (existingStock.quantity !== qty) {
+      actionType = qty > existingStock.quantity ? 'stock_increased' : 'stock_decreased';
+      description = `${actor.displayName} updated ${cleanMed} stock quantity from ${existingStock.quantity} to ${qty}`;
+    } else {
+      actionType = 'medicine_updated';
+      description = `${actor.displayName} updated details for ${cleanMed}`;
+    }
+  }
+
+  await logActivity({
+    pharmacyId: targetPharmacyId,
+    branchId: targetBranchId,
+    actor,
+    actionType,
+    targetEntityType: 'Stock',
+    targetEntityId: stock._id,
+    description,
+    details: {
+      medicine: cleanMed,
+      quantity: qty,
+      before: existingStock
+        ? { quantity: existingStock.quantity, price: existingStock.price, generic: existingStock.generic }
+        : null,
+      after: { quantity: qty, price: stock.price, generic: stock.generic }
+    }
+  });
+
   res.json(stock);
 }));
 
@@ -532,19 +572,69 @@ app.delete('/api/pharmacy/stock/:id', auth(['pharmacy', 'staff']), wrap(async (r
   }
   emitInventory({ ...stock.toObject(), quantity: 0 });
 
+  const actor = await resolveActorInfo(req);
+  await logActivity({
+    pharmacyId: stock.pharmacy,
+    branchId: stock.branch,
+    actor,
+    actionType: 'medicine_removed',
+    targetEntityType: 'Stock',
+    targetEntityId: stock._id,
+    description: `${actor.displayName} removed ${stock.medicine} from branch inventory`,
+    details: {
+      medicine: stock.medicine,
+      quantity: stock.quantity,
+      before: { medicine: stock.medicine, quantity: stock.quantity, price: stock.price, generic: stock.generic },
+      after: null
+    }
+  });
+
   res.json({
     ok: true,
     message: 'Medicine deleted successfully'
   });
 }));
-app.get('/api/pharmacy/profile', auth(['pharmacy']), wrap(async (req, res) => {
-  const pharmacy = await Pharmacy.findById(req.userId).select('-password');
+app.get('/api/pharmacy/profile', auth(['pharmacy', 'staff']), wrap(async (req, res) => {
+  const pharmacyId = req.role === 'staff' ? req.pharmacyId : req.userId;
+  const pharmacy = await Pharmacy.findById(pharmacyId).select('-password');
 
   if (!pharmacy) {
     throw httpError(404, 'Pharmacy not found');
   }
 
   res.json(pharmacy);
+}));
+
+app.get('/api/staff/profile', auth(['staff']), wrap(async (req, res) => {
+  const staff = await Staff.findById(req.userId).select('-password');
+  if (!staff) {
+    throw httpError(404, 'Staff account not found');
+  }
+
+  const [pharmacy, branch] = await Promise.all([
+    Pharmacy.findById(staff.pharmacy).select('name ownerName email phone address location'),
+    Branch.findById(staff.branch).select('name address phone location isMain isActive')
+  ]);
+
+  res.json({
+    staff: {
+      id: staff._id,
+      name: staff.name,
+      email: staff.email,
+      role: staff.role,
+      isActive: staff.isActive,
+      createdAt: staff.createdAt
+    },
+    branch,
+    pharmacy: {
+      id: pharmacy?._id,
+      name: pharmacy?.name,
+      ownerName: pharmacy?.ownerName,
+      email: pharmacy?.email,
+      phone: pharmacy?.phone,
+      address: pharmacy?.address
+    }
+  });
 }));
 app.put('/api/pharmacy/profile', auth(['pharmacy']), wrap(async (req, res) => {
   const { address, location } = req.body;
@@ -724,6 +814,32 @@ app.get('/api/pharmacy/branches/:id/staff', auth(['pharmacy']), wrap(async (req,
   res.json(staffList);
 }));
 
+app.patch('/api/pharmacy/branches/:id/staff/:staffId/status', auth(['pharmacy']), wrap(async (req, res) => {
+  const { id: branchId, staffId } = req.params;
+  const { isActive } = req.body;
+
+  if (typeof isActive !== 'boolean') {
+    throw httpError(400, 'isActive boolean status is required');
+  }
+
+  const branch = await Branch.findOne({ _id: branchId, pharmacy: req.userId });
+  if (!branch) {
+    throw httpError(403, 'Access denied: Branch does not belong to your pharmacy');
+  }
+
+  const staff = await Staff.findOneAndUpdate(
+    { _id: staffId, branch: branch._id, pharmacy: req.userId },
+    { isActive },
+    { new: true }
+  ).select('-password');
+
+  if (!staff) {
+    throw httpError(404, 'Staff member not found for this branch');
+  }
+
+  res.json(staff);
+}));
+
 // ---------- Inter-Branch Stock Transfers (Task 8) ----------
 
 // 1. Search medicine availability across other branches of the same pharmacy
@@ -886,6 +1002,28 @@ app.post('/api/pharmacy/transfers', auth(['pharmacy', 'staff']), wrap(async (req
   io.to(`branch:${supplyingBranch._id}`).emit('transfer:new', populatedTransfer);
   io.to(`branch:${destinationBranch._id}`).emit('transfer:new', populatedTransfer);
 
+  const actor = await resolveActorInfo(req);
+  await logActivity({
+    pharmacyId: req.pharmacyId,
+    branchId: destinationBranch._id,
+    actor,
+    actionType: 'transfer_requested',
+    targetEntityType: 'TransferRequest',
+    targetEntityId: transfer._id,
+    description: `Transfer of ${qty} unit(s) of "${stock.medicine}" requested from ${supplyingBranch.name} to ${destinationBranch.name} by ${actor.displayName} (${actor.actorType})`,
+    details: {
+      medicine: stock.medicine,
+      requestedQuantity: qty,
+      quantity: qty,
+      supplyingBranch: supplyingBranch._id,
+      receivingBranch: destinationBranch._id,
+      supplyingBranchName: supplyingBranch.name,
+      receivingBranchName: destinationBranch.name,
+      status: 'pending',
+      after: { status: 'pending', requestedQuantity: qty }
+    }
+  });
+
   res.status(201).json(populatedTransfer);
 }));
 
@@ -949,13 +1087,15 @@ const executeTransferAction = async (req, transferId, action, extra = {}) => {
   }
 
   // Resolve actor identity
-  let actorName;
-  if (req.role === 'staff') {
-    actorName = req.staff?.name || 'Branch Staff';
-  } else {
-    const pharmacy = await Pharmacy.findById(req.userId).select('name');
-    actorName = pharmacy?.name || 'Pharmacy Owner';
-  }
+  const actor = await resolveActorInfo(req);
+  const actorName = actor.displayName;
+
+  const [supplyingBranchDoc, receivingBranchDoc] = await Promise.all([
+    Branch.findById(transfer.fromBranch).select('name'),
+    Branch.findById(transfer.toBranch).select('name')
+  ]);
+  const supplyingBranchName = supplyingBranchDoc?.name || 'Supplying Branch';
+  const receivingBranchName = receivingBranchDoc?.name || 'Receiving Branch';
 
   const isOwner = req.role === 'pharmacy';
   const isSupplyingStaff = req.role === 'staff' && String(transfer.fromBranch) === String(req.branchId);
@@ -998,6 +1138,28 @@ const executeTransferAction = async (req, transferId, action, extra = {}) => {
     if (!updated) {
       throw httpError(409, 'Transfer status was modified by another operation');
     }
+
+    await logActivity({
+      pharmacyId: transfer.pharmacy,
+      branchId: transfer.fromBranch,
+      actor,
+      actionType: 'transfer_approved',
+      targetEntityType: 'TransferRequest',
+      targetEntityId: transfer._id,
+      description: `Transfer of ${transfer.requestedQuantity} unit(s) of "${transfer.medicine}" approved by ${actor.displayName} (${actor.actorType})`,
+      details: {
+        medicine: transfer.medicine,
+        requestedQuantity: transfer.requestedQuantity,
+        quantity: transfer.requestedQuantity,
+        supplyingBranch: transfer.fromBranch,
+        receivingBranch: transfer.toBranch,
+        supplyingBranchName,
+        receivingBranchName,
+        status: 'approved',
+        before: { status: 'pending' },
+        after: { status: 'approved' }
+      }
+    });
   } else if (cleanAction === 'reject') {
     if (transfer.status !== 'pending') {
       throw httpError(400, `Cannot reject transfer in '${transfer.status}' status`);
@@ -1029,6 +1191,29 @@ const executeTransferAction = async (req, transferId, action, extra = {}) => {
     if (!updated) {
       throw httpError(409, 'Transfer status was modified by another operation');
     }
+
+    await logActivity({
+      pharmacyId: transfer.pharmacy,
+      branchId: transfer.fromBranch,
+      actor,
+      actionType: 'transfer_rejected',
+      targetEntityType: 'TransferRequest',
+      targetEntityId: transfer._id,
+      description: `Transfer of ${transfer.requestedQuantity} unit(s) of "${transfer.medicine}" rejected by ${actor.displayName} (${actor.actorType})${extra.reason ? ': ' + extra.reason : ''}`,
+      details: {
+        medicine: transfer.medicine,
+        requestedQuantity: transfer.requestedQuantity,
+        quantity: transfer.requestedQuantity,
+        supplyingBranch: transfer.fromBranch,
+        receivingBranch: transfer.toBranch,
+        supplyingBranchName,
+        receivingBranchName,
+        status: 'rejected',
+        reason: String(extra.reason || '').trim(),
+        before: { status: 'pending' },
+        after: { status: 'rejected' }
+      }
+    });
   } else if (cleanAction === 'cancel') {
     if (!['pending', 'approved'].includes(transfer.status)) {
       throw httpError(400, `Cannot cancel transfer in '${transfer.status}' status`);
@@ -1056,6 +1241,29 @@ const executeTransferAction = async (req, transferId, action, extra = {}) => {
     if (!updated) {
       throw httpError(409, 'Transfer status was modified or already dispatched');
     }
+
+    await logActivity({
+      pharmacyId: transfer.pharmacy,
+      branchId: transfer.toBranch,
+      actor,
+      actionType: 'transfer_cancelled',
+      targetEntityType: 'TransferRequest',
+      targetEntityId: transfer._id,
+      description: `Transfer of ${transfer.requestedQuantity} unit(s) of "${transfer.medicine}" cancelled by ${actor.displayName} (${actor.actorType})${extra.reason ? ': ' + extra.reason : ''}`,
+      details: {
+        medicine: transfer.medicine,
+        requestedQuantity: transfer.requestedQuantity,
+        quantity: transfer.requestedQuantity,
+        supplyingBranch: transfer.fromBranch,
+        receivingBranch: transfer.toBranch,
+        supplyingBranchName,
+        receivingBranchName,
+        status: 'cancelled',
+        reason: String(extra.reason || '').trim(),
+        before: { status: transfer.status },
+        after: { status: 'cancelled' }
+      }
+    });
   } else if (cleanAction === 'dispatch') {
     if (transfer.status === 'pending') {
       throw httpError(400, 'Transfer must be approved before dispatch');
@@ -1104,6 +1312,29 @@ const executeTransferAction = async (req, transferId, action, extra = {}) => {
         if (!updatedStock) {
           throw httpError(400, `Insufficient stock at supplying branch to dispatch transfer of ${qty} units`);
         }
+        await logActivity({
+          pharmacyId: transfer.pharmacy,
+          branchId: transfer.fromBranch,
+          actor,
+          actionType: 'transfer_dispatched',
+          targetEntityType: 'TransferRequest',
+          targetEntityId: transfer._id,
+          description: `Transfer dispatched: ${qty} unit(s) of "${transfer.medicine}" dispatched from ${supplyingBranchName} by ${actor.displayName} (${actor.actorType})`,
+          details: {
+            medicine: transfer.medicine,
+            requestedQuantity: transfer.requestedQuantity,
+            dispatchedQuantity: qty,
+            quantity: qty,
+            supplyingBranch: transfer.fromBranch,
+            receivingBranch: transfer.toBranch,
+            supplyingBranchName,
+            receivingBranchName,
+            status: 'dispatched',
+            before: { status: 'approved' },
+            after: { status: 'dispatched', dispatchedQuantity: qty }
+          },
+          session
+        });
         await session.commitTransaction();
         emitInventory(updatedStock);
       } catch (err) {
@@ -1151,6 +1382,29 @@ const executeTransferAction = async (req, transferId, action, extra = {}) => {
         const curr = await Stock.findOne({ branch: transfer.fromBranch, medicine: rx });
         throw httpError(400, `Insufficient stock (${curr ? curr.quantity : 0}) at supplying branch to dispatch transfer of ${qty} units`);
       }
+
+      await logActivity({
+        pharmacyId: transfer.pharmacy,
+        branchId: transfer.fromBranch,
+        actor,
+        actionType: 'transfer_dispatched',
+        targetEntityType: 'TransferRequest',
+        targetEntityId: transfer._id,
+        description: `Transfer dispatched: ${qty} unit(s) of "${transfer.medicine}" dispatched from ${supplyingBranchName} by ${actor.displayName} (${actor.actorType})`,
+        details: {
+          medicine: transfer.medicine,
+          requestedQuantity: transfer.requestedQuantity,
+          dispatchedQuantity: qty,
+          quantity: qty,
+          supplyingBranch: transfer.fromBranch,
+          receivingBranch: transfer.toBranch,
+          supplyingBranchName,
+          receivingBranchName,
+          status: 'dispatched',
+          before: { status: 'approved' },
+          after: { status: 'dispatched', dispatchedQuantity: qty }
+        }
+      });
       emitInventory(updatedStock);
     }
   } else if (cleanAction === 'receive') {
@@ -1209,6 +1463,29 @@ const executeTransferAction = async (req, transferId, action, extra = {}) => {
           ], { session });
           destStock = created[0];
         }
+        await logActivity({
+          pharmacyId: transfer.pharmacy,
+          branchId: transfer.toBranch,
+          actor,
+          actionType: 'transfer_received',
+          targetEntityType: 'TransferRequest',
+          targetEntityId: transfer._id,
+          description: `Transfer received: ${qty} unit(s) of "${transfer.medicine}" received at ${receivingBranchName} by ${actor.displayName} (${actor.actorType})`,
+          details: {
+            medicine: transfer.medicine,
+            requestedQuantity: transfer.requestedQuantity,
+            dispatchedQuantity: qty,
+            quantity: qty,
+            supplyingBranch: transfer.fromBranch,
+            receivingBranch: transfer.toBranch,
+            supplyingBranchName,
+            receivingBranchName,
+            status: 'received',
+            before: { status: 'dispatched' },
+            after: { status: 'received' }
+          },
+          session
+        });
         await session.commitTransaction();
         emitInventory(destStock);
       } catch (err) {
@@ -1267,6 +1544,28 @@ const executeTransferAction = async (req, transferId, action, extra = {}) => {
             }
           }
         }
+        await logActivity({
+          pharmacyId: transfer.pharmacy,
+          branchId: transfer.toBranch,
+          actor,
+          actionType: 'transfer_received',
+          targetEntityType: 'TransferRequest',
+          targetEntityId: transfer._id,
+          description: `Transfer received: ${qty} unit(s) of "${transfer.medicine}" received at ${receivingBranchName} by ${actor.displayName} (${actor.actorType})`,
+          details: {
+            medicine: transfer.medicine,
+            requestedQuantity: transfer.requestedQuantity,
+            dispatchedQuantity: qty,
+            quantity: qty,
+            supplyingBranch: transfer.fromBranch,
+            receivingBranch: transfer.toBranch,
+            supplyingBranchName,
+            receivingBranchName,
+            status: 'received',
+            before: { status: 'dispatched' },
+            after: { status: 'received' }
+          }
+        });
         emitInventory(destStock);
       } catch (stockErr) {
         // Rollback transfer status back to 'dispatched'
@@ -1410,7 +1709,55 @@ app.patch('/api/pharmacy/reservations/:id/status', auth(['pharmacy', 'staff']), 
 
   if (status === 'cancelled') await releaseStock(reservation);
   notifyReservation(reservation, status, reservation.stock?.medicine);
+
+  const actor = await resolveActorInfo(req);
+  const branchDoc = await Branch.findById(reservation.branch).select('name');
+  const branchName = branchDoc?.name || 'Branch';
+
+  await logActivity({
+    pharmacyId: reservation.pharmacy || req.pharmacyId,
+    branchId: reservation.branch,
+    actor,
+    actionType: `reservation_${status}`,
+    targetEntityType: 'Reservation',
+    targetEntityId: reservation._id,
+    description: `Reservation for ${reservation.quantity} unit(s) of "${reservation.stock?.medicine || 'Medicine'}" marked as ${status} at ${branchName} by ${actor.displayName} (${actor.actorType})`,
+    details: {
+      medicine: reservation.stock?.medicine,
+      quantity: reservation.quantity,
+      patientName: reservation.patientName,
+      status,
+      before: { status: current.status },
+      after: { status }
+    }
+  });
+
   res.json(reservation);
+}));
+
+// ---------- Activity History Audit Logs ----------
+app.get('/api/pharmacy/activity-logs', auth(['pharmacy', 'staff']), wrap(async (req, res) => {
+  const pharmacyId = req.role === 'staff' ? req.pharmacyId : req.userId;
+  let branchId = req.role === 'staff' ? req.branchId : (req.query.branchId || undefined);
+
+  if (branchId && !mongoose.Types.ObjectId.isValid(branchId)) {
+    throw httpError(400, 'Invalid branch ID');
+  }
+
+  if (req.role === 'pharmacy' && branchId) {
+    const branch = await Branch.findOne({ _id: branchId, pharmacy: pharmacyId });
+    if (!branch) {
+      throw httpError(403, 'Branch does not belong to your pharmacy');
+    }
+  }
+
+  const logs = await getActivityLogs(pharmacyId, {
+    branchId,
+    limit: req.query.limit,
+    skip: req.query.skip
+  });
+
+  res.json(logs);
 }));
 
 // ---------- Patient search ----------

@@ -323,8 +323,6 @@ const useMyLocation = () => {
     <small className="hint">✓ Current location selected</small>
   )}
 
-  
-
 </div>
 </>}
           <label>Email<input type="email" onChange={set('email')} required /></label>
@@ -339,6 +337,8 @@ const useMyLocation = () => {
             {mode === 'login' ? `New ${isPatient ? 'patient' : 'pharmacy'}? Register` : 'Already have an account? Log in'}
           </button>
         )}
+
+
       </section>
     </div>
   );

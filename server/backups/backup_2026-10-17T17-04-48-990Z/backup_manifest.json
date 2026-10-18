@@ -1,0 +1,47 @@
+{
+  "timestamp": "2026-10-17T17:04:49.103Z",
+  "database": "test",
+  "backupDir": "c:\\Users\\senthamizhselvi\\Downloads\\pharmatrack_phase2 - Copy\\pharmafind\\server\\backups\\backup_2026-10-17T17-04-48-990Z",
+  "collections": {
+    "branches": {
+      "count": 23,
+      "file": "c:\\Users\\senthamizhselvi\\Downloads\\pharmatrack_phase2 - Copy\\pharmafind\\server\\backups\\backup_2026-10-17T17-04-48-990Z\\branches.json",
+      "fileSize": 10848
+    },
+    "staffs": {
+      "count": 12,
+      "file": "c:\\Users\\senthamizhselvi\\Downloads\\pharmatrack_phase2 - Copy\\pharmafind\\server\\backups\\backup_2026-10-17T17-04-48-990Z\\staffs.json",
+      "fileSize": 5288
+    },
+    "pharmacies": {
+      "count": 13,
+      "file": "c:\\Users\\senthamizhselvi\\Downloads\\pharmatrack_phase2 - Copy\\pharmafind\\server\\backups\\backup_2026-10-17T17-04-48-990Z\\pharmacies.json",
+      "fileSize": 7055
+    },
+    "transferrequests": {
+      "count": 10,
+      "file": "c:\\Users\\senthamizhselvi\\Downloads\\pharmatrack_phase2 - Copy\\pharmafind\\server\\backups\\backup_2026-10-17T17-04-48-990Z\\transferrequests.json",
+      "fileSize": 9907
+    },
+    "stocks": {
+      "count": 25,
+      "file": "c:\\Users\\senthamizhselvi\\Downloads\\pharmatrack_phase2 - Copy\\pharmafind\\server\\backups\\backup_2026-10-17T17-04-48-990Z\\stocks.json",
+      "fileSize": 8625
+    },
+    "activitylogs": {
+      "count": 35,
+      "file": "c:\\Users\\senthamizhselvi\\Downloads\\pharmatrack_phase2 - Copy\\pharmafind\\server\\backups\\backup_2026-10-17T17-04-48-990Z\\activitylogs.json",
+      "fileSize": 35848
+    },
+    "patients": {
+      "count": 9,
+      "file": "c:\\Users\\senthamizhselvi\\Downloads\\pharmatrack_phase2 - Copy\\pharmafind\\server\\backups\\backup_2026-10-17T17-04-48-990Z\\patients.json",
+      "fileSize": 4358
+    },
+    "reservations": {
+      "count": 7,
+      "file": "c:\\Users\\senthamizhselvi\\Downloads\\pharmatrack_phase2 - Copy\\pharmafind\\server\\backups\\backup_2026-10-17T17-04-48-990Z\\reservations.json",
+      "fileSize": 3378
+    }
+  }
+}

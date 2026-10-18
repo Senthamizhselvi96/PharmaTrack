@@ -1,0 +1,439 @@
+[
+  {
+    "_id": "6ad2249f5584cacbb2470997",
+    "isMain": true,
+    "pharmacy": "6abaaf37ff323ceeb830557b",
+    "__v": 0,
+    "address": "bharathi salai ,ramapuram",
+    "createdAt": "2026-10-16T13:20:31.138Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        50,
+        29
+      ]
+    },
+    "name": "sugam medical shop",
+    "phone": "9863525132",
+    "updatedAt": "2026-10-16T13:20:31.138Z"
+  },
+  {
+    "_id": "6ad224a05584cacbb2470998",
+    "isMain": true,
+    "pharmacy": "6abfd1278bf5186368c074da",
+    "__v": 0,
+    "address": "Muthapudupet, Avadi, Chennai, Tamil Nadu, India",
+    "createdAt": "2026-10-16T13:20:32.551Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.0595621,
+        13.1475574
+      ]
+    },
+    "name": "kalai pharmacy",
+    "phone": "6035719028",
+    "updatedAt": "2026-10-16T13:20:32.551Z"
+  },
+  {
+    "_id": "6ad224a05584cacbb2470999",
+    "isMain": true,
+    "pharmacy": "6ac1f3780354cfb431887e49",
+    "__v": 0,
+    "address": "Porur Gardens, Porur, Chennai",
+    "createdAt": "2026-10-16T13:20:32.933Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.1497931,
+        13.0435319
+      ]
+    },
+    "name": "Health Plus pharmacy",
+    "phone": "6745901234",
+    "updatedAt": "2026-10-16T13:20:32.933Z"
+  },
+  {
+    "_id": "6ad224a15584cacbb247099a",
+    "isMain": true,
+    "pharmacy": "6acb3974cbe7ab0241268cb9",
+    "__v": 0,
+    "address": "Mittanamalli, Avadi, Chennai Metropolitan Area, Avadi, Thiruvallur, Tamil Nadu, 600054, India",
+    "createdAt": "2026-10-16T13:20:33.205Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.07046225758808,
+        13.153874583738354
+      ]
+    },
+    "name": "selvampharmacy",
+    "phone": "9023781234",
+    "updatedAt": "2026-10-16T13:20:33.205Z"
+  },
+  {
+    "_id": "6ad2412074e8335c91e571ef",
+    "pharmacy": "6abfd1278bf5186368c074da",
+    "name": "Kalai Pharmacy ramapuram branch",
+    "address": "Ramapuram, Chennai, Tamil Nadu 600089, India",
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.1789136,
+        13.0314192
+      ]
+    },
+    "phone": "9763452709",
+    "isMain": false,
+    "isActive": true,
+    "createdAt": "2026-10-16T15:22:08.187Z",
+    "updatedAt": "2026-10-16T15:22:08.187Z",
+    "__v": 0
+  },
+  {
+    "_id": "6ad38cb05584cacbb2475a39",
+    "pharmacy": "6ad38cb0b189524507f9dd80",
+    "isMain": true,
+    "__v": 0,
+    "address": "100 Main St, Chennai",
+    "createdAt": "2026-10-17T14:56:49.036Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.2707,
+        13.0827
+      ]
+    },
+    "name": "Test Pharma Business 1792249008450",
+    "phone": "9876543210",
+    "updatedAt": "2026-10-17T14:56:49.036Z"
+  },
+  {
+    "_id": "6ad38cb1b189524507f9dd88",
+    "pharmacy": "6ad38cb0b189524507f9dd80",
+    "name": "Secondary Branch 1792249008450",
+    "address": "200 South Rd, Chennai",
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.26,
+        13.07
+      ]
+    },
+    "phone": "9876543211",
+    "isMain": false,
+    "isActive": true,
+    "createdAt": "2026-10-17T14:56:49.552Z",
+    "updatedAt": "2026-10-17T14:56:49.552Z",
+    "__v": 0
+  },
+  {
+    "_id": "6ad395305584cacbb2475c9e",
+    "pharmacy": "6ad39530e82e33bddc28ac4c",
+    "isMain": true,
+    "__v": 0,
+    "address": "12 Railway Station Rd, Avadi, Chennai",
+    "createdAt": "2026-10-17T15:33:04.920Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.0982,
+        13.1147
+      ]
+    },
+    "name": "Avadi City Pharmacy",
+    "phone": "9876543210",
+    "updatedAt": "2026-10-17T15:33:04.920Z"
+  },
+  {
+    "_id": "6ad39531e82e33bddc28ac54",
+    "pharmacy": "6ad39530e82e33bddc28ac4c",
+    "name": "Ramapuram Branch",
+    "address": "45 Mount Poonamallee High Rd, Ramapuram, Chennai",
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.1789,
+        13.0312
+      ]
+    },
+    "phone": "9876543211",
+    "isMain": false,
+    "isActive": true,
+    "createdAt": "2026-10-17T15:33:05.354Z",
+    "updatedAt": "2026-10-17T15:33:05.354Z",
+    "__v": 0
+  },
+  {
+    "_id": "6ad395cb5584cacbb2475cb6",
+    "pharmacy": "6ad395c8e82e33bddc28ac6d",
+    "isMain": true,
+    "__v": 0,
+    "address": "12 Railway Station Rd, Avadi, Chennai",
+    "createdAt": "2026-10-17T15:35:38.782Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.0982,
+        13.1147
+      ]
+    },
+    "name": "Avadi City Pharmacy",
+    "phone": "9876543210",
+    "updatedAt": "2026-10-17T15:35:38.782Z"
+  },
+  {
+    "_id": "6ad395cce82e33bddc28ac75",
+    "pharmacy": "6ad395c8e82e33bddc28ac6d",
+    "name": "Ramapuram Branch",
+    "address": "45 Mount Poonamallee High Rd, Ramapuram, Chennai",
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.1789,
+        13.0312
+      ]
+    },
+    "phone": "9876543211",
+    "isMain": false,
+    "isActive": true,
+    "createdAt": "2026-10-17T15:35:40.234Z",
+    "updatedAt": "2026-10-17T15:35:40.234Z",
+    "__v": 0
+  },
+  {
+    "_id": "6ad396165584cacbb2475cc1",
+    "isMain": true,
+    "pharmacy": "6ad39616e82e33bddc28ac90",
+    "__v": 0,
+    "address": "12 Railway Station Rd, Avadi, Chennai",
+    "createdAt": "2026-10-17T15:36:54.930Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.0982,
+        13.1147
+      ]
+    },
+    "name": "Avadi City Pharmacy",
+    "phone": "9876543210",
+    "updatedAt": "2026-10-17T15:36:54.930Z"
+  },
+  {
+    "_id": "6ad39617e82e33bddc28ac98",
+    "pharmacy": "6ad39616e82e33bddc28ac90",
+    "name": "Ramapuram Branch",
+    "address": "45 Mount Poonamallee High Rd, Ramapuram, Chennai",
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.1789,
+        13.0312
+      ]
+    },
+    "phone": "9876543211",
+    "isMain": false,
+    "isActive": true,
+    "createdAt": "2026-10-17T15:36:55.384Z",
+    "updatedAt": "2026-10-17T15:36:55.384Z",
+    "__v": 0
+  },
+  {
+    "_id": "6ad3968f5584cacbb2475cee",
+    "isMain": true,
+    "pharmacy": "6ad39690e82e33bddc28ace6",
+    "__v": 0,
+    "address": "12 Railway Station Rd, Avadi, Chennai",
+    "createdAt": "2026-10-17T15:38:56.248Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.0982,
+        13.1147
+      ]
+    },
+    "name": "Avadi City Pharmacy",
+    "phone": "9876543210",
+    "updatedAt": "2026-10-17T15:38:56.248Z"
+  },
+  {
+    "_id": "6ad39690e82e33bddc28acee",
+    "pharmacy": "6ad39690e82e33bddc28ace6",
+    "name": "Ramapuram Branch",
+    "address": "45 Mount Poonamallee High Rd, Ramapuram, Chennai",
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.1789,
+        13.0312
+      ]
+    },
+    "phone": "9876543211",
+    "isMain": false,
+    "isActive": true,
+    "createdAt": "2026-10-17T15:38:56.715Z",
+    "updatedAt": "2026-10-17T15:38:56.715Z",
+    "__v": 0
+  },
+  {
+    "_id": "6ad3995e5584cacbb2475d9f",
+    "isMain": true,
+    "pharmacy": "6ad3995ee82e33bddc28ad9b",
+    "__v": 0,
+    "address": "12 Railway Station Rd, Avadi, Chennai",
+    "createdAt": "2026-10-17T15:50:55.150Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.0982,
+        13.1147
+      ]
+    },
+    "name": "Avadi City Pharmacy",
+    "phone": "9876543210",
+    "updatedAt": "2026-10-17T15:50:55.150Z"
+  },
+  {
+    "_id": "6ad3995fe82e33bddc28ada3",
+    "pharmacy": "6ad3995ee82e33bddc28ad9b",
+    "name": "Ramapuram Branch",
+    "address": "45 Mount Poonamallee High Rd, Ramapuram, Chennai",
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.1789,
+        13.0312
+      ]
+    },
+    "phone": "9876543211",
+    "isMain": false,
+    "isActive": true,
+    "createdAt": "2026-10-17T15:50:55.524Z",
+    "updatedAt": "2026-10-17T15:50:55.524Z",
+    "__v": 0
+  },
+  {
+    "_id": "6ad39e525584cacbb2475eed",
+    "isMain": true,
+    "pharmacy": "6ad39e52466bda86479d03f5",
+    "__v": 0,
+    "address": "100 Medical Blvd, Chennai",
+    "createdAt": "2026-10-17T16:12:02.677Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.27,
+        13.08
+      ]
+    },
+    "name": "Audit Pharmacy 1792253521759",
+    "phone": "9876543210",
+    "updatedAt": "2026-10-17T16:12:02.677Z"
+  },
+  {
+    "_id": "6ad39e53466bda86479d03fd",
+    "pharmacy": "6ad39e52466bda86479d03f5",
+    "name": "Branch North 1792253521759",
+    "address": "200 North St, Chennai",
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.25,
+        13.09
+      ]
+    },
+    "phone": "9123456780",
+    "isMain": false,
+    "isActive": true,
+    "createdAt": "2026-10-17T16:12:03.119Z",
+    "updatedAt": "2026-10-17T16:12:03.119Z",
+    "__v": 0
+  },
+  {
+    "_id": "6ad39eb45584cacbb2475f01",
+    "isMain": true,
+    "pharmacy": "6ad39eb49c3ee604f3fa966a",
+    "__v": 0,
+    "address": "100 Medical Blvd, Chennai",
+    "createdAt": "2026-10-17T16:13:40.869Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.27,
+        13.08
+      ]
+    },
+    "name": "Audit Pharmacy 1792253620349",
+    "phone": "9876543210",
+    "updatedAt": "2026-10-17T16:13:40.869Z"
+  },
+  {
+    "_id": "6ad39eb59c3ee604f3fa9672",
+    "pharmacy": "6ad39eb49c3ee604f3fa966a",
+    "name": "Branch North 1792253620349",
+    "address": "200 North St, Chennai",
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.25,
+        13.09
+      ]
+    },
+    "phone": "9123456780",
+    "isMain": false,
+    "isActive": true,
+    "createdAt": "2026-10-17T16:13:41.728Z",
+    "updatedAt": "2026-10-17T16:13:41.728Z",
+    "__v": 0
+  },
+  {
+    "_id": "6ad3a4805584cacbb2476088",
+    "pharmacy": "6ad3a4809c3ee604f3fa97b0",
+    "isMain": true,
+    "__v": 0,
+    "address": "10 Main Road, Avadi, Chennai",
+    "createdAt": "2026-10-17T16:38:25.079Z",
+    "isActive": true,
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.0982,
+        13.1147
+      ]
+    },
+    "name": "HealthPlus Pharmacy 1792255104650",
+    "phone": "9876543210",
+    "updatedAt": "2026-10-17T16:38:25.079Z"
+  },
+  {
+    "_id": "6ad3a4819c3ee604f3fa97b8",
+    "pharmacy": "6ad3a4809c3ee604f3fa97b0",
+    "name": "Ramapuram Branch 1792255104650",
+    "address": "25 Mount Poonamallee Rd, Ramapuram, Chennai",
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.1793,
+        13.0312
+      ]
+    },
+    "phone": "9876543211",
+    "isMain": false,
+    "isActive": true,
+    "createdAt": "2026-10-17T16:38:25.539Z",
+    "updatedAt": "2026-10-17T16:38:25.539Z",
+    "__v": 0
+  }
+]

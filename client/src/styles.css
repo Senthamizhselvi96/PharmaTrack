@@ -2745,11 +2745,12 @@
   gap: 14px;
   max-height: 380px;
   overflow-y: auto;
-  padding-right: 4px;
+  padding: 4px;
   margin-bottom: 20px;
 }
 
 .available-stock-card {
+  position: relative;
   background: #f7faf8;
   border: 1px solid #d7e5e0;
   border-radius: 12px;
@@ -2772,9 +2773,11 @@
 }
 
 .available-stock-card.selected {
-  border-color: var(--pine);
+  border: 2px solid var(--pine);
   background: #e6f4ef;
-  box-shadow: 0 0 0 2px var(--pine);
+  box-shadow: 0 0 0 1px var(--pine);
+  padding: 13px;
+  z-index: 2;
 }
 
 .available-stock-card-header {
@@ -3495,5 +3498,542 @@
 .branch-dashboard-head {
   padding-top: 14px;
 }
+
+/* ===================================================
+   Branch Staff Unified Profile Container Layout
+   =================================================== */
+
+.staff-unified-profile-wrap {
+  max-width: 860px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.staff-unified-profile-card {
+  background: #ffffff;
+  border: 1.5px solid var(--line);
+  border-radius: 20px;
+  box-shadow: 0 4px 24px rgba(20, 48, 43, 0.05);
+  overflow: hidden;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.staff-unified-profile-card:hover {
+  border-color: #a8d5c8;
+  box-shadow: 0 8px 30px rgba(20, 48, 43, 0.08);
+}
+
+.staff-profile-banner {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  background: linear-gradient(135deg, #ffffff 0%, #f1f8f5 100%);
+  padding: 28px 32px;
+  border-bottom: 1px solid var(--line);
+}
+
+.staff-profile-section-block {
+  padding: 26px 32px;
+}
+
+.staff-section-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 0;
+  border: none;
+}
+
+.staff-profile-section-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.staff-profile-section-header .section-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.staff-profile-section-header h2 {
+  margin: 0 0 4px;
+  font-size: 1.18rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.staff-profile-section-header .section-subtitle {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.staff-info-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18px 24px;
+}
+
+.staff-info-fields-grid .info-field.full-width {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 640px) {
+  .staff-profile-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 20px 22px;
+    gap: 16px;
+  }
+
+  .staff-profile-section-block {
+    padding: 20px 22px;
+  }
+
+  .staff-info-fields-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+}
+
+/* ===================================================
+   Pharmacy Owner Branch Activity History Styles
+   =================================================== */
+
+.activity-history-view {
+  max-width: 1100px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.activity-section-card {
+  background: #ffffff;
+  border: 1.5px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(20, 48, 43, 0.04);
+}
+
+.btn-refresh-activity {
+  background: #f1f8f5;
+  color: var(--pine);
+  border: 1.5px solid #a8d5c8;
+  padding: 9px 18px;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 0.88rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.btn-refresh-activity:hover:not(:disabled) {
+  background: #e2f2ec;
+  border-color: var(--pine);
+  transform: translateY(-1px);
+}
+
+.btn-refresh-activity:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Activity Filter Bar */
+.activity-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 28px;
+  padding: 18px 20px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+
+.activity-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.activity-filter-label {
+  font-size: 0.82rem;
+  font-weight: 750;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.activity-filter-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.activity-filter-pill {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.activity-filter-pill:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+
+.activity-filter-pill.active {
+  background: var(--pine);
+  color: #ffffff;
+  border-color: var(--pine);
+  box-shadow: 0 2px 6px rgba(20, 48, 43, 0.2);
+}
+
+/* Status / Info Notice Box */
+.activity-filter-info-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 0.82rem;
+  color: #166534;
+  margin-bottom: 18px;
+}
+
+.btn-clear-activity-filters {
+  background: #ffffff;
+  border: 1px solid #86efac;
+  color: #166534;
+  font-weight: 700;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-clear-activity-filters:hover {
+  background: #dcfce7;
+}
+
+/* Loading & Empty States */
+.activity-loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  gap: 14px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.activity-empty-box {
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.activity-empty-box h3 {
+  margin: 0 0 6px;
+  color: var(--ink);
+  font-size: 1.15rem;
+}
+
+.activity-empty-box .empty-subtext {
+  max-width: 480px;
+  margin: 0 auto;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+/* Timeline List & Cards */
+.activity-timeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.activity-log-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid var(--pine);
+  border-radius: 10px;
+  padding: 14px 18px;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.03);
+}
+
+.activity-log-card:hover {
+  border-color: #cbd5e1;
+  border-left-color: var(--pine);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+  transform: translateY(-1px);
+}
+
+.activity-log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.activity-badge-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.activity-action-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 750;
+  padding: 4px 10px;
+  border-radius: 6px;
+  letter-spacing: 0.02em;
+}
+
+.activity-action-badge .badge-icon {
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+/* Badge Color Themes */
+.act-badge-emerald {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+
+.act-badge-amber {
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.act-badge-blue {
+  background: #eff6ff;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+}
+
+.act-badge-rose {
+  background: #fff1f2;
+  color: #9f1239;
+  border: 1px solid #fecdd3;
+}
+
+.act-badge-purple {
+  background: #f5f3ff;
+  color: #5b21b6;
+  border: 1px solid #ddd6fe;
+}
+
+.act-badge-indigo {
+  background: #eef2ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+}
+
+.act-badge-teal {
+  background: #f0fdfa;
+  color: #115e59;
+  border: 1px solid #99f6e4;
+}
+
+.act-badge-gray {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+
+/* Actor Badge */
+.activity-actor-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.activity-actor-badge.actor-owner {
+  background: #f0fdf4;
+  color: #14532d;
+  border: 1px solid #bbf7d0;
+}
+
+.activity-actor-badge.actor-staff {
+  background: #f8fafc;
+  color: #1e293b;
+  border: 1px solid #e2e8f0;
+}
+
+.actor-role-tag {
+  opacity: 0.8;
+  font-weight: 600;
+  font-size: 0.72rem;
+}
+
+.activity-time {
+  font-size: 0.78rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.activity-description {
+  margin: 0 0 10px 0;
+  font-size: 0.92rem;
+  color: var(--ink);
+  line-height: 1.45;
+  font-weight: 550;
+}
+
+/* Details Strip */
+.activity-details-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.activity-detail-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.76rem;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #334155;
+  font-weight: 600;
+}
+
+.activity-detail-chip.chip-medicine {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #15803d;
+  font-weight: 700;
+}
+
+.activity-detail-chip.chip-diff {
+  background: #fefce8;
+  border-color: #fef08a;
+  color: #854d0e;
+}
+
+.diff-old {
+  color: #dc2626;
+  text-decoration: line-through;
+}
+
+.diff-new {
+  color: #16a34a;
+  font-weight: 800;
+}
+
+.activity-detail-chip.chip-transfer-route {
+  background: #f0f9ff;
+  border-color: #bae6fd;
+  color: #0369a1;
+}
+
+.activity-detail-chip.chip-reason {
+  background: #fff7ed;
+  border-color: #ffedd5;
+  color: #9a3412;
+}
+
+/* Pagination Footer */
+.activity-pagination-footer {
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-load-more-activity {
+  background: #ffffff;
+  color: var(--pine);
+  border: 1.5px solid var(--pine);
+  padding: 10px 24px;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  font-weight: 750;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-load-more-activity:hover:not(:disabled) {
+  background: var(--pine);
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(20, 48, 43, 0.2);
+}
+
+.btn-load-more-activity:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.all-activities-loaded-badge {
+  font-size: 0.82rem;
+  color: #64748b;
+  font-weight: 600;
+  padding: 8px 16px;
+  background: #f8fafc;
+  border-radius: 20px;
+  border: 1px solid #e2e8f0;
+}
+
+.btn-retry-activity {
+  margin-top: 8px;
+  background: #fee2e2;
+  border: 1px solid #f87171;
+  color: #991b1b;
+  font-weight: 700;
+  font-size: 0.82rem;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-retry-activity:hover {
+  background: #fca5a5;
+}
+
+@media (max-width: 640px) {
+  .activity-filter-bar {
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+  }
+  .activity-log-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
 
 

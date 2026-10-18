@@ -23,6 +23,62 @@ const parseCoordinates = loc => {
   return null;
 };
 
+const getActivityActionMeta = (actionType) => {
+  switch (actionType) {
+    case 'medicine_added':
+      return { label: 'Medicine Added', badgeClass: 'act-badge-emerald', icon: '➕' };
+    case 'stock_increased':
+      return { label: 'Stock Increased', badgeClass: 'act-badge-emerald', icon: '📈' };
+    case 'stock_decreased':
+      return { label: 'Stock Decreased', badgeClass: 'act-badge-amber', icon: '📉' };
+    case 'medicine_updated':
+      return { label: 'Medicine Updated', badgeClass: 'act-badge-blue', icon: '✏️' };
+    case 'medicine_removed':
+      return { label: 'Medicine Deleted', badgeClass: 'act-badge-rose', icon: '🗑️' };
+    case 'reservation_confirmed':
+      return { label: 'Reservation Confirmed', badgeClass: 'act-badge-emerald', icon: '✅' };
+    case 'reservation_ready':
+      return { label: 'Reservation Ready', badgeClass: 'act-badge-blue', icon: '📦' };
+    case 'reservation_collected':
+      return { label: 'Reservation Collected', badgeClass: 'act-badge-purple', icon: '🤝' };
+    case 'reservation_cancelled':
+      return { label: 'Reservation Cancelled', badgeClass: 'act-badge-rose', icon: '❌' };
+    case 'transfer_requested':
+      return { label: 'Transfer Requested', badgeClass: 'act-badge-amber', icon: '🔄' };
+    case 'transfer_approved':
+      return { label: 'Transfer Approved', badgeClass: 'act-badge-emerald', icon: '✓' };
+    case 'transfer_rejected':
+      return { label: 'Transfer Rejected', badgeClass: 'act-badge-rose', icon: '✕' };
+    case 'transfer_cancelled':
+      return { label: 'Transfer Cancelled', badgeClass: 'act-badge-gray', icon: '🚫' };
+    case 'transfer_dispatched':
+      return { label: 'Transfer Dispatched', badgeClass: 'act-badge-indigo', icon: '🚚' };
+    case 'transfer_received':
+      return { label: 'Transfer Received', badgeClass: 'act-badge-teal', icon: '📥' };
+    default:
+      return {
+        label: (actionType || 'Action').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        badgeClass: 'act-badge-blue',
+        icon: '📝'
+      };
+  }
+};
+
+const formatActivityTime = (dateString) => {
+  if (!dateString) return '';
+  const d = new Date(dateString);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  }) + ' at ' + d.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  });
+};
+
 export default function Dashboard({ auth, socket, onLogout }) {
   const isOwner = auth.role === 'pharmacy';
   const isStaff = auth.role === 'staff';
@@ -33,6 +89,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
   const [profile, setProfile] = useState(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [view, setView] = useState(() => (isOwner ? 'branches' : 'dashboard'));
+  const [previousOwnerView, setPreviousOwnerView] = useState('branches');
   const [resv, setResv] = useState([]);
   const [item, setItem] = useState(blank);
   const [err, setErr] = useState('');
@@ -105,6 +162,27 @@ export default function Dashboard({ auth, socket, onLogout }) {
   const [actionBusy, setActionBusy] = useState(false);
   const [actionErr, setActionErr] = useState('');
 
+  // Branch staff management state (Owner only)
+  const [branchStaffList, setBranchStaffList] = useState([]);
+  const [loadingBranchStaff, setLoadingBranchStaff] = useState(false);
+  const [branchStaffErr, setBranchStaffErr] = useState('');
+  const [branchStaffSuccess, setBranchStaffSuccess] = useState('');
+  const [showAddStaffModal, setShowAddStaffModal] = useState(false);
+  const [addStaffForm, setAddStaffForm] = useState({ name: '', email: '', password: '', confirmPassword: '' });
+  const [savingStaff, setSavingStaff] = useState(false);
+  const [addStaffErr, setAddStaffErr] = useState('');
+
+  // Branch Activity History state (Owner only)
+  const [activityLogs, setActivityLogs] = useState([]);
+  const [loadingActivityLogs, setLoadingActivityLogs] = useState(false);
+  const [activityLogsErr, setActivityLogsErr] = useState('');
+  const [activityCategoryFilter, setActivityCategoryFilter] = useState('all');
+  const [activityActorFilter, setActivityActorFilter] = useState('all');
+  const [activitySkip, setActivitySkip] = useState(0);
+  const [hasMoreActivities, setHasMoreActivities] = useState(true);
+  const [loadingMoreActivities, setLoadingMoreActivities] = useState(false);
+  const ACTIVITY_PAGE_SIZE = 20;
+
   const token = auth.token;
   const profileMenuRef = useRef(null);
   const reverseGeocodeReqIdRef = useRef(0);
@@ -116,17 +194,20 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
   const activeBranch = useMemo(() => {
     if (isStaff) {
-      return auth.branch
+      const b = profile?.branch || auth.branch;
+      return b
         ? {
-            _id: auth.branch.id || auth.branch?._id,
-            name: auth.branch.name,
-            address: auth.branch.address,
-            isMain: auth.branch.isMain
+            _id: b.id || b._id,
+            name: b.name,
+            address: b.address,
+            phone: b.phone || '',
+            location: b.location || null,
+            isMain: b.isMain
           }
         : null;
     }
     return branches.find(b => b._id === selectedBranchId) || null;
-  }, [isStaff, auth.branch, branches, selectedBranchId]);
+  }, [isStaff, auth.branch, profile?.branch, branches, selectedBranchId]);
 
   const currentBranchId = useMemo(() => {
     if (isStaff) {
@@ -147,38 +228,38 @@ export default function Dashboard({ auth, socket, onLogout }) {
     return srcId === currentBranchId;
   };
 
-  // Permission checkers for Task 9 actions
+  // Permission checkers for Task 9 actions respecting branch context
   const canApprove = (t) => {
     if (t.status !== 'pending') return false;
-    if (isOwner) return true;
+    if (isOwner) return isOutgoingTransfer(t);
     const staffBranch = String(auth.branch?.id || auth.branch?._id || '');
     return isStaff && String(t.fromBranch?._id || t.fromBranch) === staffBranch;
   };
 
   const canReject = (t) => {
     if (t.status !== 'pending') return false;
-    if (isOwner) return true;
+    if (isOwner) return isOutgoingTransfer(t);
     const staffBranch = String(auth.branch?.id || auth.branch?._id || '');
     return isStaff && String(t.fromBranch?._id || t.fromBranch) === staffBranch;
   };
 
   const canDispatch = (t) => {
     if (t.status !== 'approved') return false;
-    if (isOwner) return true;
+    if (isOwner) return isOutgoingTransfer(t);
     const staffBranch = String(auth.branch?.id || auth.branch?._id || '');
     return isStaff && String(t.fromBranch?._id || t.fromBranch) === staffBranch;
   };
 
   const canReceive = (t) => {
     if (t.status !== 'dispatched') return false;
-    if (isOwner) return true;
+    if (isOwner) return isIncomingTransfer(t);
     const staffBranch = String(auth.branch?.id || auth.branch?._id || '');
     return isStaff && String(t.toBranch?._id || t.toBranch) === staffBranch;
   };
 
   const canCancel = (t) => {
     if (!['pending', 'approved'].includes(t.status)) return false;
-    if (isOwner) return true;
+    if (isOwner) return isIncomingTransfer(t);
     const staffBranch = String(auth.branch?.id || auth.branch?._id || '');
     const isRequesterUser = String(t.requestedBy?.userId) === String(auth.id);
     const isDestStaff = String(t.toBranch?._id || t.toBranch) === staffBranch;
@@ -187,6 +268,11 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
   const filteredTransfers = useMemo(() => {
     return transfers.filter(t => {
+      // Ensure transfer belongs to the currently active branch
+      if (currentBranchId && !isIncomingTransfer(t) && !isOutgoingTransfer(t)) {
+        return false;
+      }
+
       // Direction filter
       if (transferDirectionFilter === 'incoming' && !isIncomingTransfer(t)) return false;
       if (transferDirectionFilter === 'outgoing' && !isOutgoingTransfer(t)) return false;
@@ -199,14 +285,108 @@ export default function Dashboard({ auth, socket, onLogout }) {
   }, [transfers, transferDirectionFilter, transferStatusFilter, currentBranchId]);
 
   const pendingTransfersCount = useMemo(() => {
-    return transfers.filter(t => t.status === 'pending').length;
-  }, [transfers]);
+    return transfers.filter(t => {
+      if (currentBranchId && !isIncomingTransfer(t) && !isOutgoingTransfer(t)) {
+        return false;
+      }
+      return t.status === 'pending';
+    }).length;
+  }, [transfers, currentBranchId]);
 
-  const loadTransfers = async () => {
+  const filteredActivityLogs = useMemo(() => {
+    return activityLogs.filter(log => {
+      // Category filter
+      if (activityCategoryFilter === 'inventory') {
+        const isInv = log.targetEntityType === 'Stock' ||
+          (log.actionType && (log.actionType.startsWith('medicine_') || log.actionType.startsWith('stock_')));
+        if (!isInv) return false;
+      } else if (activityCategoryFilter === 'reservations') {
+        const isRes = log.targetEntityType === 'Reservation' ||
+          (log.actionType && log.actionType.startsWith('reservation_'));
+        if (!isRes) return false;
+      } else if (activityCategoryFilter === 'transfers') {
+        const isTrf = log.targetEntityType === 'TransferRequest' ||
+          (log.actionType && log.actionType.startsWith('transfer_'));
+        if (!isTrf) return false;
+      }
+
+      // Actor filter
+      if (activityActorFilter === 'owner') {
+        const isOwnerActor = log.actor?.actorType === 'Owner' || log.actor?.role === 'pharmacy';
+        if (!isOwnerActor) return false;
+      } else if (activityActorFilter === 'staff') {
+        const isStaffActor = log.actor?.actorType === 'Staff' || log.actor?.role === 'staff';
+        if (!isStaffActor) return false;
+      }
+
+      return true;
+    });
+  }, [activityLogs, activityCategoryFilter, activityActorFilter]);
+
+  const categoryCounts = useMemo(() => {
+    let inv = 0;
+    let resvCount = 0;
+    let trf = 0;
+    for (const log of activityLogs) {
+      if (log.targetEntityType === 'Stock' || (log.actionType && (log.actionType.startsWith('medicine_') || log.actionType.startsWith('stock_')))) {
+        inv++;
+      } else if (log.targetEntityType === 'Reservation' || (log.actionType && log.actionType.startsWith('reservation_'))) {
+        resvCount++;
+      } else if (log.targetEntityType === 'TransferRequest' || (log.actionType && log.actionType.startsWith('transfer_'))) {
+        trf++;
+      }
+    }
+    return { all: activityLogs.length, inventory: inv, reservations: resvCount, transfers: trf };
+  }, [activityLogs]);
+
+  const loadActivityLogs = async (branchId, skip = 0, isAppend = false) => {
+    if (!isOwner || !branchId) return;
+    try {
+      if (isAppend) {
+        setLoadingMoreActivities(true);
+      } else {
+        setLoadingActivityLogs(true);
+        setActivityLogsErr('');
+      }
+
+      const data = await api(`/pharmacy/activity-logs?branchId=${branchId}&limit=${ACTIVITY_PAGE_SIZE}&skip=${skip}`, { token });
+      if (Array.isArray(data)) {
+        if (isAppend) {
+          setActivityLogs(prev => {
+            const existingIds = new Set(prev.map(l => l._id));
+            const fresh = data.filter(l => !existingIds.has(l._id));
+            return [...prev, ...fresh];
+          });
+        } else {
+          setActivityLogs(data);
+        }
+        setActivitySkip(skip + data.length);
+        setHasMoreActivities(data.length === ACTIVITY_PAGE_SIZE);
+      }
+    } catch (e) {
+      console.error('Failed to load activity logs:', e);
+      setActivityLogsErr(e.message || 'Failed to load activity history');
+    } finally {
+      setLoadingActivityLogs(false);
+      setLoadingMoreActivities(false);
+    }
+  };
+
+  const resetAndLoadActivityLogs = (branchId) => {
+    setActivityLogs([]);
+    setActivitySkip(0);
+    setHasMoreActivities(true);
+    setActivityLogsErr('');
+    loadActivityLogs(branchId, 0, false);
+  };
+
+  const loadTransfers = async (explicitBranchId) => {
     try {
       setLoadingTransfers(true);
       setTransferErr('');
-      const data = await api('/pharmacy/transfers', { token });
+      const branchIdToQuery = explicitBranchId || (isOwner ? (selectedBranchId || selectedBranchIdRef.current) : (auth.branch?.id || auth.branch?._id));
+      const url = branchIdToQuery ? `/pharmacy/transfers?branchId=${branchIdToQuery}` : '/pharmacy/transfers';
+      const data = await api(url, { token });
       setTransfers(Array.isArray(data) ? data : []);
     } catch (e) {
       setTransferErr(e.message || 'Failed to load transfer requests');
@@ -245,7 +425,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
   const loadAvailableStock = async (query = '') => {
     try {
       setLoadingAvailableStock(true);
-      const destId = isOwner ? selectedBranchIdRef.current : (auth.branch?.id || auth.branch?._id);
+      const destId = isOwner ? (selectedBranchId || selectedBranchIdRef.current) : (auth.branch?.id || auth.branch?._id);
       const params = new URLSearchParams();
       if (destId) params.append('toBranchId', destId);
       if (query && query.trim()) params.append('q', query.trim());
@@ -363,12 +543,38 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
   const loadProfile = async () => {
     if (!isOwner) {
-      setProfile({
-        name: auth.name,
-        email: auth.email,
-        branchName: auth.branch?.name
-      });
-      return;
+      try {
+        const staffData = await api('/staff/profile', { token });
+        setProfile({
+          ...staffData.pharmacy,
+          staff: staffData.staff,
+          branch: staffData.branch,
+          pharmacy: staffData.pharmacy,
+          ownerName: staffData.pharmacy?.ownerName,
+          pharmacyName: staffData.pharmacy?.name,
+          email: staffData.staff?.email || auth.email,
+          name: staffData.staff?.name || auth.name
+        });
+        return staffData;
+      } catch {
+        try {
+          const pharm = await api('/pharmacy/profile', { token });
+          setProfile({
+            ...pharm,
+            pharmacy: pharm,
+            staff: { name: auth.name, email: auth.email, role: 'staff' },
+            branch: auth.branch
+          });
+        } catch {
+          setProfile({
+            name: auth.name,
+            email: auth.email,
+            staff: { name: auth.name, email: auth.email, role: 'staff' },
+            branch: auth.branch
+          });
+        }
+        return null;
+      }
     }
     try {
       const data = await api('/pharmacy/profile', { token });
@@ -387,29 +593,144 @@ export default function Dashboard({ auth, socket, onLogout }) {
     }
   };
 
+  const loadBranchStaff = async (branchId) => {
+    if (!isOwner || !branchId) return;
+    try {
+      setLoadingBranchStaff(true);
+      setBranchStaffErr('');
+      const data = await api(`/pharmacy/branches/${branchId}/staff`, { token });
+      setBranchStaffList(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setBranchStaffErr(e.message || 'Failed to load branch staff');
+    } finally {
+      setLoadingBranchStaff(false);
+    }
+  };
+
+  const handleAddStaffSubmit = async (e) => {
+    e.preventDefault();
+    if (savingStaff || !activeBranch) return;
+    setAddStaffErr('');
+    setBranchStaffSuccess('');
+
+    const cleanName = (addStaffForm.name || '').trim();
+    const cleanEmail = (addStaffForm.email || '').trim().toLowerCase();
+    const password = addStaffForm.password || '';
+    const confirmPassword = addStaffForm.confirmPassword || '';
+
+    if (!cleanName) {
+      setAddStaffErr('Staff full name is required');
+      return;
+    }
+    if (!cleanEmail) {
+      setAddStaffErr('Staff email is required');
+      return;
+    }
+    if (password.length < 6) {
+      setAddStaffErr('Password must be at least 6 characters');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setAddStaffErr('Confirm password does not match temporary password');
+      return;
+    }
+
+    try {
+      setSavingStaff(true);
+      const newStaff = await api(`/pharmacy/branches/${activeBranch._id}/staff`, {
+        method: 'POST',
+        token,
+        body: {
+          name: cleanName,
+          email: cleanEmail,
+          password
+        }
+      });
+      setBranchStaffSuccess(`Staff member "${newStaff.name}" registered successfully.`);
+      setAddStaffForm({ name: '', email: '', password: '', confirmPassword: '' });
+      setShowAddStaffModal(false);
+      await loadBranchStaff(activeBranch._id);
+      setTimeout(() => setBranchStaffSuccess(''), 4000);
+    } catch (err) {
+      setAddStaffErr(err.message || 'Failed to register staff');
+    } finally {
+      setSavingStaff(false);
+    }
+  };
+
+  const handleToggleStaffStatus = async (staffMember) => {
+    if (!activeBranch?._id || !staffMember?._id) return;
+    try {
+      setBranchStaffErr('');
+      const targetStatus = !(staffMember.isActive !== false);
+      const updated = await api(`/pharmacy/branches/${activeBranch._id}/staff/${staffMember._id}/status`, {
+        method: 'PATCH',
+        token,
+        body: { isActive: targetStatus }
+      });
+      setBranchStaffList(list => list.map(s => (s._id === updated._id ? { ...s, isActive: updated.isActive } : s)));
+      setBranchStaffSuccess(`Staff member "${updated.name}" account ${updated.isActive ? 'activated' : 'deactivated'} successfully.`);
+      setTimeout(() => setBranchStaffSuccess(''), 4000);
+    } catch (e) {
+      setBranchStaffErr(e.message || 'Failed to update staff status');
+    }
+  };
+
   useEffect(() => {
     if (isOwner) {
       loadBranches();
       loadProfile();
     } else {
       load();
+      loadProfile();
     }
   }, []);
 
   useEffect(() => {
-    if (view === 'profile' && isOwner) {
-      if (branches.length === 0) loadBranches();
-      if (!profile) loadProfile();
+    if (view === 'profile') {
+      if (isOwner) {
+        if (branches.length === 0) loadBranches();
+        if (!profile) loadProfile();
+      } else {
+        loadProfile();
+      }
     }
   }, [view, isOwner]);
 
   useEffect(() => {
+    if ((view === 'staff-management' || view === 'branch-profile') && isOwner && activeBranch?._id) {
+      loadBranchStaff(activeBranch._id);
+    }
+  }, [view, isOwner, activeBranch?._id]);
+
+  useEffect(() => {
+    if (view === 'transfers') {
+      loadTransfers(selectedBranchId);
+      loadAvailableStock();
+    }
+  }, [view, selectedBranchId]);
+
+  useEffect(() => {
+    if (view === 'activity-history' && isOwner && activeBranch?._id) {
+      resetAndLoadActivityLogs(activeBranch._id);
+    }
+  }, [view, isOwner, activeBranch?._id]);
+
+  useEffect(() => {
     if (!socket) return;
-    const refresh = () => load().catch(e => setErr(e.message));
+    const refresh = () => {
+      load().catch(e => setErr(e.message));
+      if (view === 'activity-history' && activeBranch?._id) {
+        loadActivityLogs(activeBranch._id, 0, false);
+      }
+    };
     const onTransferChange = () => {
       loadTransfers();
       loadAvailableStock();
       load().catch(e => setErr(e.message));
+      if (view === 'activity-history' && activeBranch?._id) {
+        loadActivityLogs(activeBranch._id, 0, false);
+      }
     };
     socket.on('reservation:new', refresh);
     socket.on('reservation:updated', refresh);
@@ -425,7 +746,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
       socket.off('transfer:status', onTransferChange);
       socket.off('transfer:updated', onTransferChange);
     };
-  }, [socket]);
+  }, [socket, view, activeBranch?._id]);
 
   const handleBranchChange = async (e) => {
     const nextBranchId = e.target.value;
@@ -436,6 +757,8 @@ export default function Dashboard({ auth, socket, onLogout }) {
     await load(nextBranchId);
     if (isOwner && view === 'branches') {
       setView('dashboard');
+    } else if (isOwner && view === 'activity-history') {
+      resetAndLoadActivityLogs(nextBranchId);
     }
   };
 
@@ -445,6 +768,10 @@ export default function Dashboard({ auth, socket, onLogout }) {
     setItem(blank);
     load(branchId);
     setView(targetSubView);
+    setPreviousOwnerView(targetSubView);
+    if (targetSubView === 'activity-history') {
+      resetAndLoadActivityLogs(branchId);
+    }
   };
 
   // Add Branch Handlers
@@ -1049,6 +1376,10 @@ export default function Dashboard({ auth, socket, onLogout }) {
     });
   }, [stock, searchQuery, stockFilter]);
 
+  const isOwnerBranchProfileContext = Boolean(
+    isOwner && view === 'profile' && previousOwnerView !== 'branches' && activeBranch
+  );
+
   return (
     <div className="app-shell">
       <header className="topbar pharmacy-topbar">
@@ -1063,7 +1394,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
         <nav className="pharmacy-nav" aria-label="Pharmacy navigation">
           {isOwner ? (
             <>
-              {(view === 'branches' || view === 'profile') && (
+              {(view === 'branches' || (view === 'profile' && !isOwnerBranchProfileContext)) && (
                 <button
                   type="button"
                   className={view === 'branches' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
@@ -1077,7 +1408,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                 </button>
               )}
 
-              {activeBranch && view !== 'branches' && view !== 'profile' && (
+              {activeBranch && ((view !== 'branches' && view !== 'profile') || isOwnerBranchProfileContext) && (
                 <>
                   <button
                     type="button"
@@ -1114,10 +1445,32 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
                   <button
                     type="button"
+                    className={view === 'staff-management' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
+                    onClick={() => {
+                      setView('staff-management');
+                      if (activeBranch?._id) loadBranchStaff(activeBranch._id);
+                    }}
+                  >
+                    Staff Management
+                  </button>
+
+                  <button
+                    type="button"
                     className={view === 'branch-profile' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
                     onClick={() => setView('branch-profile')}
                   >
                     Branch Profile
+                  </button>
+
+                  <button
+                    type="button"
+                    className={view === 'activity-history' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
+                    onClick={() => {
+                      setView('activity-history');
+                      if (activeBranch?._id) resetAndLoadActivityLogs(activeBranch._id);
+                    }}
+                  >
+                    Activity History
                   </button>
                 </>
               )}
@@ -1129,7 +1482,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                 className={view === 'dashboard' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
                 onClick={() => setView('dashboard')}
               >
-                Dashboard
+                Inventory
               </button>
 
               <button
@@ -1177,7 +1530,12 @@ export default function Dashboard({ auth, socket, onLogout }) {
         <div className="profile-menu-wrap" ref={profileMenuRef}>
           <button
             type="button"
-            className="profile-trigger"
+            className={`profile-trigger ${view === 'profile' ? 'active' : ''}`}
+            style={view === 'profile' ? {
+              background: 'rgba(255, 255, 255, 0.24)',
+              borderColor: 'rgba(255, 255, 255, 0.7)',
+              boxShadow: '0 0 0 2px rgba(255, 255, 255, 0.25)'
+            } : undefined}
             onClick={() => {
               setProfileMenuOpen(open => !open);
               if (!profile) loadProfile();
@@ -1196,10 +1554,13 @@ export default function Dashboard({ auth, socket, onLogout }) {
               <button
                 type="button"
                 onClick={() => {
+                  if (view !== 'profile') {
+                    setPreviousOwnerView(view);
+                  }
                   setView('profile');
                   setProfileMenuOpen(false);
                   loadProfile();
-                  if (isOwner) loadBranches();
+                  if (isOwner && branches.length === 0) loadBranches();
                 }}
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1811,7 +2172,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                             openBranchDashboard(b._id, 'dashboard');
                           }}
                         >
-                          Open Branch Dashboard →
+                          Open Dashboard →
                         </button>
 
                         <button
@@ -2340,22 +2701,6 @@ export default function Dashboard({ auth, socket, onLogout }) {
                       </div>
                     </div>
 
-                    {confirmModal.action === 'dispatch' && (
-                      <div className="transfer-modal-warning">
-                        <strong>⚠️ Stock Deduction Warning:</strong> Confirming dispatch will atomically deduct{' '}
-                        <strong>{confirmModal.transfer.requestedQuantity} units</strong> from{' '}
-                        <strong>{confirmModal.transfer.fromBranch?.name}</strong>. Please ensure the physical medicines are packed for transport.
-                      </div>
-                    )}
-
-                    {confirmModal.action === 'receive' && (
-                      <div className="transfer-modal-warning" style={{ background: '#f0fdf4', borderColor: '#bbf7d0', color: '#166534' }}>
-                        <strong>✓ Stock Addition:</strong> Confirming receipt will immediately add{' '}
-                        <strong>{confirmModal.transfer.dispatchedQuantity || confirmModal.transfer.requestedQuantity} units</strong>{' '}
-                        to <strong>{confirmModal.transfer.toBranch?.name}</strong>'s inventory for dispensing.
-                      </div>
-                    )}
-
                     {(confirmModal.action === 'reject' || confirmModal.action === 'cancel') && (
                       <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                         <span style={{ fontWeight: 700, fontSize: '0.88rem' }}>Reason (Optional):</span>
@@ -2431,6 +2776,140 @@ export default function Dashboard({ auth, socket, onLogout }) {
         </>
       )}
 
+      {view === 'staff-management' && isOwner && (
+        <>
+          <div className="branch-top-nav-bar">
+            <button
+              type="button"
+              className="btn-back-branches"
+              onClick={() => {
+                setView('branches');
+                loadBranches();
+              }}
+            >
+              ← Back to Main Page
+            </button>
+          </div>
+          <div className="dashboard-head branch-dashboard-head">
+            <div>
+              <p className="eyebrow">PHARMACY OWNER DASHBOARD</p>
+              <h1>{activeBranch?.name ? `${activeBranch.name} Staff Management` : 'Staff Management'}</h1>
+              {activeBranch && (
+                <p className="branch-active-subtitle">
+                  <span>📍 {activeBranch.address}</span>
+                  {activeBranch.isMain && <span className="badge-main-branch">★ Main Branch</span>}
+                  {activeBranch.phone && <span>• 📞 {activeBranch.phone}</span>}
+                </p>
+              )}
+            </div>
+            <div>
+              <button
+                type="button"
+                className="btn-create-branch"
+                onClick={() => {
+                  setAddStaffErr('');
+                  setBranchStaffSuccess('');
+                  setAddStaffForm({ name: '', email: '', password: '', confirmPassword: '' });
+                  setShowAddStaffModal(true);
+                }}
+              >
+                + Add New Staff
+              </button>
+            </div>
+          </div>
+
+          <main className="content-wrap pharmacy-branch-profile-view">
+            {activeBranch ? (
+              <section className="profile-section-card">
+                <div className="section-card-header">
+                  <span className="section-icon" aria-hidden="true">👥</span>
+                  <div>
+                    <h2>Branch Staff Accounts</h2>
+                    <p className="section-subtitle">Owner-managed credentials and authorization for {activeBranch.name}</p>
+                  </div>
+                </div>
+
+                <div className="section-card-body">
+                  {branchStaffSuccess && <div className="hint" style={{ color: 'var(--pine)', fontWeight: 600, marginBottom: '14px' }}>✓ {branchStaffSuccess}</div>}
+                  {branchStaffErr && <div className="error-box" style={{ marginBottom: '14px' }}>{branchStaffErr}</div>}
+
+                  {loadingBranchStaff ? (
+                    <div className="loading-state-box">
+                      <span className="loading-spinner" aria-hidden="true" />
+                      <span>Loading branch staff...</span>
+                    </div>
+                  ) : branchStaffList.length === 0 ? (
+                    <div className="empty empty-state-box">
+                      <p className="empty-state-desc">No staff members added yet</p>
+                    </div>
+                  ) : (
+                    <div className="staff-members-table-wrap" style={{ overflowX: 'auto' }}>
+                      <table className="staff-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '2px solid var(--line)', color: 'var(--muted)' }}>
+                            <th style={{ padding: '12px 14px' }}>Staff Full Name</th>
+                            <th style={{ padding: '12px 14px' }}>Staff Email</th>
+                            <th style={{ padding: '12px 14px' }}>Assigned Branch</th>
+                            <th style={{ padding: '12px 14px' }}>Account Status</th>
+                            <th style={{ padding: '12px 14px', textAlign: 'right' }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {branchStaffList.map(s => {
+                            const isActive = s.isActive !== false;
+                            return (
+                              <tr key={s._id} style={{ borderBottom: '1px solid var(--line)' }}>
+                                <td style={{ padding: '14px', fontWeight: 700 }}>{s.name}</td>
+                                <td style={{ padding: '14px' }}>{s.email}</td>
+                                <td style={{ padding: '14px' }}>
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                    <span aria-hidden="true">📍</span>
+                                    {activeBranch.name}
+                                  </span>
+                                </td>
+                                <td style={{ padding: '14px' }}>
+                                  <span className={`badge-active-status ${isActive ? 'active' : 'inactive'}`}>
+                                    {isActive ? 'Active' : 'Inactive'}
+                                  </span>
+                                </td>
+                                <td style={{ padding: '14px', textAlign: 'right' }}>
+                                  <button
+                                    type="button"
+                                    className={`btn-table-action ${isActive ? 'btn-deactivate' : 'btn-activate'}`}
+                                    style={{
+                                      padding: '6px 14px',
+                                      fontSize: '0.82rem',
+                                      fontWeight: 600,
+                                      borderRadius: '6px',
+                                      border: '1px solid',
+                                      cursor: 'pointer',
+                                      background: isActive ? '#fff' : 'var(--pine, #10b981)',
+                                      color: isActive ? 'var(--crimson, #ef4444)' : '#fff',
+                                      borderColor: isActive ? 'var(--crimson, #ef4444)' : 'var(--pine, #10b981)'
+                                    }}
+                                    onClick={() => handleToggleStaffStatus(s)}
+                                  >
+                                    {isActive ? 'Deactivate' : 'Activate'}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </section>
+            ) : (
+              <div className="empty empty-state-box">
+                <p>No branch selected. Please return to the branch list.</p>
+              </div>
+            )}
+          </main>
+        </>
+      )}
+
       {view === 'branch-profile' && isOwner && (
         <>
           <div className="branch-top-nav-bar">
@@ -2471,7 +2950,8 @@ export default function Dashboard({ auth, socket, onLogout }) {
           <main className="content-wrap branch-profile-view">
 
             {activeBranch ? (
-              <section className="profile-section-card">
+              <>
+                <section className="profile-section-card">
                 <div className="section-card-header">
                   <span className="section-icon" aria-hidden="true">🏥</span>
                   <div>
@@ -2541,9 +3021,322 @@ export default function Dashboard({ auth, socket, onLogout }) {
                   )}
                 </div>
               </section>
+
+              </>
             ) : (
               <div className="empty empty-state-box">
                 <p>No branch selected. Please return to the branch list.</p>
+              </div>
+            )}
+          </main>
+        </>
+      )}
+
+      {view === 'activity-history' && isOwner && (
+        <>
+          <div className="branch-top-nav-bar">
+            <button
+              type="button"
+              className="btn-back-branches"
+              onClick={() => {
+                setView('branches');
+                loadBranches();
+              }}
+            >
+              ← Back to Main Page
+            </button>
+          </div>
+          <div className="dashboard-head branch-dashboard-head">
+            <div>
+              <p className="eyebrow">PHARMACY OWNER DASHBOARD</p>
+              <h1>{activeBranch?.name ? `${activeBranch.name} Activity History` : 'Branch Activity History'}</h1>
+              {activeBranch && (
+                <p className="branch-active-subtitle">
+                  <span>📍 {activeBranch.address}</span>
+                  {activeBranch.isMain && <span className="badge-main-branch">★ Main Branch</span>}
+                  {activeBranch.phone && <span>• 📞 {activeBranch.phone}</span>}
+                </p>
+              )}
+            </div>
+            <div>
+              <button
+                type="button"
+                className="btn-refresh-activity"
+                disabled={loadingActivityLogs}
+                onClick={() => activeBranch?._id && resetAndLoadActivityLogs(activeBranch._id)}
+                title="Refresh activities from server"
+              >
+                {loadingActivityLogs ? 'Refreshing...' : '↻ Refresh History'}
+              </button>
+            </div>
+          </div>
+
+          <main className="content-wrap activity-history-view">
+            {activeBranch ? (
+              <section className="profile-section-card activity-section-card">
+                <div className="section-card-header">
+                  <span className="section-icon" aria-hidden="true">📜</span>
+                  <div>
+                    <h2>Branch Activity &amp; Audit History</h2>
+                    <p className="section-subtitle">
+                      Complete immutable record of inventory updates, reservations, and inter-branch transfers for {activeBranch.name}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="section-card-body">
+                  {/* Filters Bar */}
+                  <div className="activity-filter-bar">
+                    <div className="activity-filter-group">
+                      <span className="activity-filter-label">Category:</span>
+                      <div className="activity-filter-pills">
+                        <button
+                          type="button"
+                          className={`activity-filter-pill ${activityCategoryFilter === 'all' ? 'active' : ''}`}
+                          onClick={() => setActivityCategoryFilter('all')}
+                        >
+                          All ({categoryCounts.all})
+                        </button>
+                        <button
+                          type="button"
+                          className={`activity-filter-pill ${activityCategoryFilter === 'inventory' ? 'active' : ''}`}
+                          onClick={() => setActivityCategoryFilter('inventory')}
+                        >
+                          📦 Inventory ({categoryCounts.inventory})
+                        </button>
+                        <button
+                          type="button"
+                          className={`activity-filter-pill ${activityCategoryFilter === 'reservations' ? 'active' : ''}`}
+                          onClick={() => setActivityCategoryFilter('reservations')}
+                        >
+                          📑 Reservations ({categoryCounts.reservations})
+                        </button>
+                        <button
+                          type="button"
+                          className={`activity-filter-pill ${activityCategoryFilter === 'transfers' ? 'active' : ''}`}
+                          onClick={() => setActivityCategoryFilter('transfers')}
+                        >
+                          🔄 Transfers ({categoryCounts.transfers})
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="activity-filter-group">
+                      <span className="activity-filter-label">Actor:</span>
+                      <div className="activity-filter-pills">
+                        <button
+                          type="button"
+                          className={`activity-filter-pill ${activityActorFilter === 'all' ? 'active' : ''}`}
+                          onClick={() => setActivityActorFilter('all')}
+                        >
+                          👥 Everyone
+                        </button>
+                        <button
+                          type="button"
+                          className={`activity-filter-pill ${activityActorFilter === 'owner' ? 'active' : ''}`}
+                          onClick={() => setActivityActorFilter('owner')}
+                        >
+                          👑 Owner
+                        </button>
+                        <button
+                          type="button"
+                          className={`activity-filter-pill ${activityActorFilter === 'staff' ? 'active' : ''}`}
+                          onClick={() => setActivityActorFilter('staff')}
+                        >
+                          👤 Staff
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Filter Status Notice */}
+                  {activityLogs.length > 0 && (
+                    <div className="activity-filter-info-box">
+                      <span>
+                        Showing <strong>{filteredActivityLogs.length}</strong> of <strong>{activityLogs.length}</strong> loaded records for this branch.
+                        {hasMoreActivities ? ' (Filters apply to currently loaded records. Click "Load More" below to fetch older history.)' : ' (All branch records loaded.)'}
+                      </span>
+                      {(activityCategoryFilter !== 'all' || activityActorFilter !== 'all') && (
+                        <button
+                          type="button"
+                          className="btn-clear-activity-filters"
+                          onClick={() => {
+                            setActivityCategoryFilter('all');
+                            setActivityActorFilter('all');
+                          }}
+                        >
+                          Reset Filters
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Error Box */}
+                  {activityLogsErr && (
+                    <div className="error-box" style={{ marginBottom: '16px' }}>
+                      <p>{activityLogsErr}</p>
+                      <button
+                        type="button"
+                        className="btn-retry-activity"
+                        onClick={() => activeBranch?._id && resetAndLoadActivityLogs(activeBranch._id)}
+                      >
+                        Try Again
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Loading State */}
+                  {loadingActivityLogs && activityLogs.length === 0 && (
+                    <div className="activity-loading-state">
+                      <div className="spinner"></div>
+                      <p>Loading activity history for {activeBranch.name}...</p>
+                    </div>
+                  )}
+
+                  {/* Empty State - No records recorded yet */}
+                  {!loadingActivityLogs && activityLogs.length === 0 && !activityLogsErr && (
+                    <div className="empty empty-state-box activity-empty-box">
+                      <div className="empty-icon" style={{ fontSize: '2.4rem', marginBottom: '8px' }}>📜</div>
+                      <h3>No activities recorded for this branch yet.</h3>
+                      <p className="empty-subtext">
+                        Actions performed on medicine inventory, reservations, and inter-branch stock transfers for {activeBranch.name} will be logged here automatically.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Empty State - Filters returned 0 */}
+                  {!loadingActivityLogs && activityLogs.length > 0 && filteredActivityLogs.length === 0 && (
+                    <div className="empty empty-state-box activity-empty-box">
+                      <div className="empty-icon" style={{ fontSize: '2rem', marginBottom: '8px' }}>🔍</div>
+                      <h3>No activities match your filter selection</h3>
+                      <p className="empty-subtext">
+                        Try changing the category or actor filter above to see more loaded activities.
+                      </p>
+                      <button
+                        type="button"
+                        className="btn-create-branch"
+                        style={{ marginTop: '12px' }}
+                        onClick={() => {
+                          setActivityCategoryFilter('all');
+                          setActivityActorFilter('all');
+                        }}
+                      >
+                        Clear Filters
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Activity Timeline List */}
+                  {filteredActivityLogs.length > 0 && (
+                    <div className="activity-timeline-list">
+                      {filteredActivityLogs.map((log) => {
+                        const meta = getActivityActionMeta(log.actionType);
+                        const isOwnerActor = log.actor?.actorType === 'Owner' || log.actor?.role === 'pharmacy';
+                        const details = log.details || {};
+                        const formattedTime = formatActivityTime(log.createdAt);
+
+                        return (
+                          <article key={log._id} className="activity-log-card">
+                            <div className="activity-log-header">
+                              <div className="activity-badge-group">
+                                <span className={`activity-action-badge ${meta.badgeClass}`}>
+                                  <span className="badge-icon">{meta.icon}</span>
+                                  {meta.label}
+                                </span>
+                                <span className={`activity-actor-badge ${isOwnerActor ? 'actor-owner' : 'actor-staff'}`}>
+                                  {isOwnerActor ? '👑' : '👤'} {log.actor?.displayName || (isOwnerActor ? 'Pharmacy Owner' : 'Branch Staff')}
+                                  <span className="actor-role-tag">({isOwnerActor ? 'Owner' : 'Staff'})</span>
+                                </span>
+                              </div>
+                              <time className="activity-time" dateTime={log.createdAt} title={new Date(log.createdAt).toISOString()}>
+                                🕒 {formattedTime}
+                              </time>
+                            </div>
+
+                            <p className="activity-description">
+                              {log.description}
+                            </p>
+
+                            {/* Contextual Details Strip */}
+                            <div className="activity-details-strip">
+                              {details.medicine && (
+                                <span className="activity-detail-chip chip-medicine" title="Affected Medicine">
+                                  💊 {details.medicine}
+                                </span>
+                              )}
+
+                              {details.before?.quantity !== undefined && details.after?.quantity !== undefined && (
+                                <span className="activity-detail-chip chip-diff" title="Quantity Change">
+                                  📊 Stock: <strong className="diff-old">{details.before.quantity}</strong> → <strong className="diff-new">{details.after.quantity}</strong> units
+                                </span>
+                              )}
+
+                              {details.before?.quantity === undefined && details.quantity !== undefined && (
+                                <span className="activity-detail-chip chip-qty" title="Quantity">
+                                  📦 Qty: <strong>{details.quantity}</strong> units
+                                </span>
+                              )}
+
+                              {details.dispatchedQuantity !== undefined && (
+                                <span className="activity-detail-chip chip-qty" title="Dispatched Quantity">
+                                  🚚 Dispatched: <strong>{details.dispatchedQuantity}</strong> units
+                                </span>
+                              )}
+
+                              {details.status && (
+                                <span className="activity-detail-chip chip-status" title="Status">
+                                  🏷️ Status: <strong>{details.status}</strong>
+                                </span>
+                              )}
+
+                              {details.patientName && (
+                                <span className="activity-detail-chip chip-patient" title="Patient Name">
+                                  🧑‍🦱 Patient: <strong>{details.patientName}</strong>
+                                </span>
+                              )}
+
+                              {details.supplyingBranch && details.receivingBranch && (
+                                <span className="activity-detail-chip chip-transfer-route" title="Transfer Route">
+                                  🔄 From <strong>{details.supplyingBranchName || details.supplyingBranch?.name || 'Supplying Branch'}</strong> → To <strong>{details.receivingBranchName || details.receivingBranch?.name || 'Receiving Branch'}</strong>
+                                </span>
+                              )}
+
+                              {details.reason && (
+                                <span className="activity-detail-chip chip-reason" title="Reason">
+                                  💬 Reason: <em>"{details.reason}"</em>
+                                </span>
+                              )}
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Pagination Section */}
+                  {activityLogs.length > 0 && (
+                    <div className="activity-pagination-footer">
+                      {hasMoreActivities ? (
+                        <button
+                          type="button"
+                          className="btn-load-more-activity"
+                          disabled={loadingMoreActivities}
+                          onClick={() => loadActivityLogs(activeBranch._id, activitySkip, true)}
+                        >
+                          {loadingMoreActivities ? 'Loading Older Activities...' : 'Load More Activities ↓'}
+                        </button>
+                      ) : (
+                        <div className="all-activities-loaded-badge">
+                          ✓ All {activityLogs.length} activity records loaded for {activeBranch.name}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </section>
+            ) : (
+              <div className="empty empty-state-box">
+                <p>No branch selected. Please return to the branch overview.</p>
               </div>
             )}
           </main>
@@ -2556,7 +3349,24 @@ export default function Dashboard({ auth, socket, onLogout }) {
       <button
         type="button"
         className="back-button"
-        onClick={() => setView(isOwner ? 'branches' : 'dashboard')}
+        onClick={() => {
+          const returnView = isOwner ? (previousOwnerView || 'branches') : 'dashboard';
+          setView(returnView);
+          if (returnView === 'reservations') {
+            load();
+          } else if (returnView === 'transfers') {
+            loadTransfers();
+            loadAvailableStock();
+          } else if (returnView === 'staff-management') {
+            if (activeBranch?._id) loadBranchStaff(activeBranch._id);
+          } else if (returnView === 'activity-history') {
+            if (activeBranch?._id) resetAndLoadActivityLogs(activeBranch._id);
+          } else if (returnView === 'dashboard') {
+            load();
+          } else if (returnView === 'branches') {
+            loadBranches();
+          }
+        }}
       >
         ← Back to Dashboard
       </button>
@@ -2756,301 +3566,214 @@ export default function Dashboard({ auth, socket, onLogout }) {
         </div>
       </>
     ) : (
-      <>
-        {/* Profile Header Hero */}
-        <section className="pharmacy-profile-hero">
-          <div className="hero-avatar-wrap">
-            <span className="pharmacy-hero-avatar">
-              {(profile?.name || auth.name || 'P').trim().charAt(0).toUpperCase()}
-            </span>
-          </div>
-
-          <div className="hero-meta-wrap">
-            <span className="pharmacy-account-badge">
-              <span className="badge-status-dot" aria-hidden="true"></span>
-              Pharmacy Account
-            </span>
-            <h1 className="pharmacy-hero-title">{profile?.name || auth.name}</h1>
-            <p className="pharmacy-hero-subtitle">
-              {profile?.createdAt
-                ? `Member pharmacy since ${new Date(profile.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`
-                : 'PharmaTrack Partner Pharmacy'}
-            </p>
-          </div>
-        </section>
-
-        {/* Profile Details Sections Grid */}
-        <div className="pharmacy-profile-sections">
-      {/* 1. Pharmacy Information */}
-      <section className="profile-section-card">
-        <div className="section-card-header">
-          <span className="section-icon" aria-hidden="true">🏥</span>
-          <div>
-            <h2>Pharmacy Information</h2>
-            <p className="section-subtitle">Registered facility name & location details</p>
-          </div>
-        </div>
-
-        <div className="section-card-body">
-          <div className="info-field">
-            <span className="info-label">Pharmacy Name</span>
-            <span className="info-value name-highlight">{profile?.name || auth.name}</span>
-          </div>
-
-          <div className="info-field">
-            <span className="info-label">{isStaff ? 'Branch Address' : 'Pharmacy Address'}</span>
-            {!editingAddress ? (
-              <div>
-                <div className="address-display-box">
-                  <p className="info-value address-text">
-                    {profile?.address || (isStaff ? auth.branch?.address : 'Address not specified')}
-                  </p>
-                  {isOwner && (
-                    <button
-                      type="button"
-                      className="edit-address-button"
-                      onClick={() => {
-                        const saved = parseCoordinates(profile?.location);
-                        if (saved) {
-                          setSelectedLocation(saved);
-                        }
-                        setTypedAddress(profile?.address || '');
-                        setAddressNeedsResolution(false);
-                        setAddressMsg({ type: '', text: '' });
-                        setGeocodeMsg('');
-                        setEditingAddress(true);
-                      }}
-                    >
-                      Edit Address
-                    </button>
-                  )}
-                </div>
-                {addressMsg.text && (
-                  <div
-                    className={addressMsg.type === 'error' ? 'error-box' : 'hint'}
-                    style={{
-                      marginTop: '10px',
-                      color: addressMsg.type === 'success' ? 'var(--pine)' : undefined,
-                      fontWeight: addressMsg.type === 'success' ? '600' : undefined
-                    }}
-                  >
-                    {addressMsg.type === 'success' ? '✓ ' : ''}{addressMsg.text}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="profile-edit-field">
-                <div className="address-input-row">
-                  <input
-                    type="text"
-                    value={typedAddress}
-                    onChange={handleAddressInputChange}
-                    placeholder="Enter your pharmacy address"
-                    style={{ flex: 1 }}
-                  />
-                  <button
-                    type="button"
-                    className="find-on-map-button"
-                    disabled={resolvingAddress || !typedAddress.trim()}
-                    onClick={handleFindOnMap}
-                    title="Search address on map"
-                  >
-                    {resolvingAddress ? 'Searching…' : '🔍 Find on Map'}
-                  </button>
-                </div>
-
-                {addressNeedsResolution && (
-                  <small className="hint" style={{ display: 'block', marginTop: '6px', color: '#b54708', fontWeight: '500' }}>
-                    ⚠️ Address modified. Click &ldquo;Find on Map&rdquo; to locate it or choose a position on the map before saving.
-                  </small>
-                )}
-
-                {resolvingAddress && (
-                  <small className="hint" style={{ display: 'block', marginTop: '6px' }}>
-                    🔍 Looking up coordinates for the entered address…
-                  </small>
-                )}
-
-                {reverseGeocoding && (
-                  <small className="hint" style={{ display: 'block', marginTop: '6px' }}>
-                    🔍 Looking up address for the selected location…
-                  </small>
-                )}
-
-                {geocodeMsg && (
-                  <p className="note" style={{ marginTop: '8px', marginBottom: '8px' }}>
-                    {geocodeMsg}
-                  </p>
-                )}
-
-                <div style={{ marginTop: '16px', marginBottom: '16px' }}>
-                  <h3>Select Pharmacy Location</h3>
-
-                  <p className="muted">
-                    Select the exact pharmacy location on the map.
-                    Click the map to place a pin or drag the marker.
-                  </p>
-
-                  <PharmacyLocationPicker
-                    position={selectedLocation}
-                    onChange={handleLocationChange}
-                  />
-                </div>
-
-                <div className="address-actions">
-                  <button
-                    type="button"
-                    className="save-profile-button"
-                    disabled={savingAddress || resolvingAddress}
-                    onClick={handleSaveAddress}
-                  >
-                    {savingAddress ? 'Saving Address…' : 'Save Address'}
-                  </button>
-                  <button
-                    type="button"
-                    className="cancel-address-button"
-                    disabled={savingAddress || resolvingAddress}
-                    onClick={() => {
-                      reverseGeocodeReqIdRef.current++;
-                      setEditingAddress(false);
-                      setAddressNeedsResolution(false);
-                      setTypedAddress(profile?.address || '');
-                      setAddressMsg({ type: '', text: '' });
-                      setGeocodeMsg('');
-                      loadProfile();
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-
-                {addressMsg.text && (
-                  <div
-                    className={addressMsg.type === 'error' ? 'error-box' : 'hint'}
-                    style={{
-                      marginTop: '12px',
-                      color: addressMsg.type === 'success' ? 'var(--pine)' : undefined,
-                      fontWeight: addressMsg.type === 'success' ? '600' : undefined
-                    }}
-                  >
-                    {addressMsg.type === 'success' ? '✓ ' : ''}{addressMsg.text}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {displayCoordinates && (
-            <div className="info-field">
-              <span className="info-label">Location Mapping</span>
-              <div className="map-integration-box">
-                <span className="coordinates-tag">
-                  📍 {displayCoordinates.lat.toFixed(4)}° N, {displayCoordinates.lng.toFixed(4)}° E
-                </span>
-                <a
-                  className="map-link-btn"
-                  href={`https://www.google.com/maps/dir/?api=1&destination=${displayCoordinates.lat},${displayCoordinates.lng}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open in Google Maps ↗
-                </a>
-              </div>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* 2. User / Owner Information */}
-      <section className="profile-section-card">
-        <div className="section-card-header">
-          <span className="section-icon" aria-hidden="true">👤</span>
-          <div>
-            <h2>{isStaff ? 'Staff Information' : 'Owner Information'}</h2>
-            <p className="section-subtitle">
-              {isStaff ? 'Branch team member credentials' : 'Primary license holder & administrator'}
-            </p>
-          </div>
-        </div>
-
-        <div className="section-card-body">
-          <div className="info-field">
-            <span className="info-label">{isStaff ? 'Staff Name' : 'Owner Name'}</span>
-            <span className="info-value">
-              {isStaff ? auth.name : profile?.ownerName || 'Not specified'}
-            </span>
-          </div>
-
-          <div className="info-field">
-            <span className="info-label">Account Role</span>
-            <span className="role-tag">
-              {isStaff ? 'Branch Staff Member' : 'Pharmacy Administrator'}
-            </span>
-          </div>
-
-          {isStaff && auth.branch && (
-            <div className="info-field">
-              <span className="info-label">Assigned Branch</span>
-              <span className="info-value name-highlight">
-                {auth.branch.name} {auth.branch.isMain ? '(Main Branch)' : ''}
+      <div className="staff-unified-profile-wrap">
+        <div className="staff-unified-profile-card">
+          {/* Top Heading & Account Summary Banner */}
+          <div className="staff-profile-banner">
+            <div className="hero-avatar-wrap">
+              <span className="pharmacy-hero-avatar">
+                {(profile?.staff?.name || auth.name || 'S').trim().charAt(0).toUpperCase()}
               </span>
             </div>
-          )}
 
-          <div className="info-field">
-            <span className="info-label">Registration Date</span>
-            <span className="info-value">
-              {profile?.createdAt
-                ? new Date(profile.createdAt).toLocaleDateString('en-US', {
-                    day: 'numeric',
-                    month: 'short',
-                    year: 'numeric'
-                  })
-                : '—'}
-            </span>
+            <div className="hero-meta-wrap">
+              <span className="pharmacy-account-badge">
+                <span className="badge-status-dot" aria-hidden="true"></span>
+                Branch Staff Account
+              </span>
+              <h1 className="pharmacy-hero-title">{profile?.staff?.name || auth.name}</h1>
+              <p className="pharmacy-hero-subtitle">
+                Staff Member • Assigned to {profile?.branch?.name || auth.branch?.name || 'Branch'}
+                {profile?.staff?.createdAt && ` • Active since ${new Date(profile.staff.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`}
+              </p>
+            </div>
           </div>
+
+          {/* Section 1 — Pharmacy Owner Information */}
+          <section className="staff-profile-section-block">
+            <div className="staff-profile-section-header">
+              <span className="section-icon" aria-hidden="true">🏥</span>
+              <div>
+                <h2>Pharmacy Owner Information</h2>
+                <p className="section-subtitle">Parent pharmacy business and administrator details</p>
+              </div>
+            </div>
+
+            <div className="staff-info-fields-grid">
+              <div className="info-field">
+                <span className="info-label">Pharmacy Name</span>
+                <span className="info-value name-highlight">
+                  {profile?.pharmacy?.name || profile?.name || '—'}
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Owner / Pharmacist Name</span>
+                <span className="info-value">
+                  {profile?.pharmacy?.ownerName || profile?.ownerName || 'Not specified'}
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Owner Email</span>
+                <span className="info-value contact-value">
+                  <span className="field-icon" aria-hidden="true">✉️</span>
+                  {profile?.pharmacy?.email || profile?.email || '—'}
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Contact Number</span>
+                <span className="info-value contact-value">
+                  <span className="field-icon" aria-hidden="true">📞</span>
+                  {profile?.pharmacy?.phone || profile?.phone || 'Not provided'}
+                </span>
+              </div>
+
+              <div className="info-field full-width">
+                <span className="info-label">Headquarters Address</span>
+                <span className="info-value address-text">
+                  {profile?.pharmacy?.address || '—'}
+                </span>
+              </div>
+            </div>
+          </section>
+
+          <hr className="staff-section-divider" />
+
+          {/* Section 2 — Staff Account Information */}
+          <section className="staff-profile-section-block">
+            <div className="staff-profile-section-header">
+              <span className="section-icon" aria-hidden="true">👤</span>
+              <div>
+                <h2>Staff Account Information</h2>
+                <p className="section-subtitle">Your credentials and authorization in PharmaTrack</p>
+              </div>
+            </div>
+
+            <div className="staff-info-fields-grid">
+              <div className="info-field">
+                <span className="info-label">Staff Full Name</span>
+                <span className="info-value">
+                  <strong>{profile?.staff?.name || auth.name}</strong>
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Staff Email</span>
+                <span className="info-value contact-value">
+                  <span className="field-icon" aria-hidden="true">✉️</span>
+                  {profile?.staff?.email || auth.email}
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Account Role</span>
+                <span className="role-tag">Branch Staff Member</span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Account Status</span>
+                <span className="status-live-tag">
+                  <span className="status-dot-active" aria-hidden="true"></span>
+                  Active &amp; Verified
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Assigned Branch</span>
+                <span className="info-value">
+                  {profile?.branch?.name || auth.branch?.name || '—'}
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Registration Date</span>
+                <span className="info-value">
+                  {profile?.staff?.createdAt
+                    ? new Date(profile.staff.createdAt).toLocaleDateString('en-US', {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric'
+                      })
+                    : '—'}
+                </span>
+              </div>
+            </div>
+          </section>
+
+          <hr className="staff-section-divider" />
+
+          {/* Section 3 — Assigned Branch Details */}
+          <section className="staff-profile-section-block">
+            <div className="staff-profile-section-header">
+              <span className="section-icon" aria-hidden="true">📍</span>
+              <div>
+                <h2>Assigned Branch Details</h2>
+                <p className="section-subtitle">Physical pharmacy facility where you are stationed</p>
+              </div>
+            </div>
+
+            <div className="staff-info-fields-grid">
+              <div className="info-field">
+                <span className="info-label">Branch Name</span>
+                <span className="info-value name-highlight">
+                  {profile?.branch?.name || auth.branch?.name || '—'}
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Branch Type</span>
+                <span className="info-value">
+                  {(profile?.branch?.isMain ?? auth.branch?.isMain) ? '★ Main Branch' : 'Secondary Branch'}
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Operating Status</span>
+                <span className="info-value">
+                  <span className="badge-active-status active">Active &amp; Open</span>
+                </span>
+              </div>
+
+              <div className="info-field">
+                <span className="info-label">Branch Phone</span>
+                <span className="info-value contact-value">
+                  <span className="field-icon" aria-hidden="true">📞</span>
+                  {profile?.branch?.phone || 'Not provided'}
+                </span>
+              </div>
+
+              <div className="info-field full-width">
+                <span className="info-label">Branch Address</span>
+                <span className="info-value address-text">
+                  {profile?.branch?.address || auth.branch?.address || '—'}
+                </span>
+              </div>
+
+              {profile?.branch?.location && parseCoordinates(profile.branch.location) && (
+                <div className="info-field full-width">
+                  <span className="info-label">Location Mapping</span>
+                  <div className="map-integration-box">
+                    <span className="coordinates-tag">
+                      📍 {parseCoordinates(profile.branch.location).lat.toFixed(6)}° N, {parseCoordinates(profile.branch.location).lng.toFixed(6)}° E
+                    </span>
+                    <a
+                      className="map-link-btn"
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${parseCoordinates(profile.branch.location).lat},${parseCoordinates(profile.branch.location).lng}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open in Google Maps ↗
+                    </a>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
         </div>
-      </section>
-
-      {/* 3. Contact Information */}
-      <section className="profile-section-card">
-        <div className="section-card-header">
-          <span className="section-icon" aria-hidden="true">📞</span>
-          <div>
-            <h2>Contact Information</h2>
-            <p className="section-subtitle">Communications & patient notifications</p>
-          </div>
-        </div>
-
-        <div className="section-card-body">
-          <div className="info-field">
-            <span className="info-label">Email Address</span>
-            <span className="info-value contact-value">
-              <span className="field-icon" aria-hidden="true">✉️</span>
-              {profile?.email || auth.email || '—'}
-            </span>
-          </div>
-
-          <div className="info-field">
-            <span className="info-label">Phone Number</span>
-            <span className="info-value contact-value">
-              <span className="field-icon" aria-hidden="true">📞</span>
-              {profile?.phone || 'Not provided'}
-            </span>
-          </div>
-
-          <div className="info-field">
-            <span className="info-label">Account Status</span>
-            <span className="status-live-tag">
-              <span className="status-dot-active" aria-hidden="true"></span>
-              Active &amp; Verified
-            </span>
-          </div>
-        </div>
-      </section>
-    </div>
-    </>
-  )}
+      </div>
+    )}
   </main>
 )}
 
@@ -3364,6 +4087,108 @@ export default function Dashboard({ auth, socket, onLogout }) {
                   disabled={savingEditBranch || editBranchResolving}
                 >
                   {savingEditBranch ? 'Saving Changes…' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Staff Modal (Owner Only) */}
+      {showAddStaffModal && (
+        <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) setShowAddStaffModal(false); }}>
+          <div className="branch-modal-card">
+            <button
+              type="button"
+              className="close"
+              onClick={() => setShowAddStaffModal(false)}
+              aria-label="Close modal"
+            >
+              ×
+            </button>
+            <div className="branch-modal-header">
+              <p className="eyebrow">NEW STAFF MEMBER</p>
+              <h2>Add Staff to {activeBranch?.name}</h2>
+              <p className="branch-modal-subtitle">
+                Create login credentials for a staff member stationed at this branch.
+              </p>
+            </div>
+
+            <form onSubmit={handleAddStaffSubmit} className="form-grid">
+              <label>
+                Assigned Pharmacy Branch
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  value={activeBranch?.name ? `${activeBranch.name}${activeBranch.isMain ? ' (Main Branch)' : ''}` : ''}
+                  style={{ background: 'var(--card-bg, #f4f6f8)', cursor: 'not-allowed', color: 'var(--ink)' }}
+                />
+              </label>
+
+              <label>
+                Staff Full Name *
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Rahul Sharma"
+                  value={addStaffForm.name}
+                  onChange={e => setAddStaffForm(f => ({ ...f, name: e.target.value }))}
+                />
+              </label>
+
+              <label>
+                Email *
+                <input
+                  type="email"
+                  required
+                  placeholder="e.g. rahul@example.com"
+                  value={addStaffForm.email}
+                  onChange={e => setAddStaffForm(f => ({ ...f, email: e.target.value }))}
+                />
+              </label>
+
+              <label>
+                Temporary Password * (minimum 6 characters)
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="••••••••"
+                  value={addStaffForm.password}
+                  onChange={e => setAddStaffForm(f => ({ ...f, password: e.target.value }))}
+                />
+              </label>
+
+              <label>
+                Confirm Password *
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="••••••••"
+                  value={addStaffForm.confirmPassword}
+                  onChange={e => setAddStaffForm(f => ({ ...f, confirmPassword: e.target.value }))}
+                />
+              </label>
+
+              {addStaffErr && <div className="error-box">{addStaffErr}</div>}
+
+              <div className="branch-modal-actions">
+                <button
+                  type="button"
+                  className="btn-modal-cancel"
+                  disabled={savingStaff}
+                  onClick={() => setShowAddStaffModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-modal-submit"
+                  disabled={savingStaff}
+                >
+                  {savingStaff ? 'Creating Staff Account…' : 'Add Staff Member'}
                 </button>
               </div>
             </form>

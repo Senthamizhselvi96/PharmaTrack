@@ -167,3 +167,38 @@ transferRequestSchema.index({ pharmacy: 1, createdAt: -1 });
 
 export const TransferRequest = model('TransferRequest', transferRequestSchema);
 
+const activityLogSchema = new Schema({
+  pharmacy: { type: Schema.Types.ObjectId, ref: 'Pharmacy', required: true, index: true },
+  branch: { type: Schema.Types.ObjectId, ref: 'Branch', index: true },
+  actor: {
+    userId: { type: Schema.Types.ObjectId, required: true },
+    role: { type: String, enum: ['pharmacy', 'staff', 'Owner', 'Staff'], required: true },
+    actorType: { type: String, enum: ['Owner', 'Staff'] },
+    displayName: { type: String, required: true, trim: true }
+  },
+  actionType: { type: String, required: true, index: true },
+  targetEntityType: { type: String, required: true },
+  targetEntityId: { type: Schema.Types.ObjectId, required: true },
+  description: { type: String, required: true, trim: true },
+  details: new Schema({
+    before: { type: Schema.Types.Mixed },
+    after: { type: Schema.Types.Mixed },
+    supplyingBranch: { type: Schema.Types.ObjectId, ref: 'Branch' },
+    receivingBranch: { type: Schema.Types.ObjectId, ref: 'Branch' },
+    supplyingBranchName: { type: String, trim: true },
+    receivingBranchName: { type: String, trim: true },
+    medicine: { type: String, trim: true },
+    quantity: { type: Number },
+    requestedQuantity: { type: Number },
+    dispatchedQuantity: { type: Number },
+    status: { type: String, trim: true },
+    reason: { type: String, trim: true },
+    patientName: { type: String, trim: true }
+  }, { _id: false, strict: false })
+}, { timestamps: true });
+
+activityLogSchema.index({ pharmacy: 1, createdAt: -1 });
+activityLogSchema.index({ branch: 1, createdAt: -1 });
+activityLogSchema.index({ targetEntityId: 1 });
+
+export const ActivityLog = model('ActivityLog', activityLogSchema);
