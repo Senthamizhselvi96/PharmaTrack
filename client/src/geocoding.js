@@ -190,3 +190,243 @@ export async function searchAddressWithFallback(rawAddress) {
     matchedCandidate
   };
 }
+
+/**
+ * Geocodes an address using the Google Maps Geocoder API.
+ * Distinguishes exact (ROOFTOP/RANGE_INTERPOLATED) from approximate (GEOMETRIC_CENTER/APPROXIMATE) matches.
+ * Does NOT silently fall back to broad city coordinates when an address is not found.
+ *
+ * @param {string} rawAddress
+ * @returns {Promise<{
+ *   success: boolean,
+ *   notFound?: boolean,
+ *   error?: string,
+ *   lat?: number,
+ *   lng?: number,
+ *   formattedAddress?: string,
+ *   precision?: 'exact' | 'approximate',
+ *   locationType?: string,
+ *   matchedQuery?: string,
+ *   suggestions?: Array<object>,
+ *   results?: Array<object>
+ * }>}
+ */
+export function geocodeAddressWithGoogle(rawAddress) {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined' || !window.google?.maps?.Geocoder) {
+      return resolve({ success: false, error: 'Google Maps Geocoder is not loaded' });
+    }
+    const clean = String(rawAddress || '').trim();
+    if (!clean) {
+      return resolve({ success: false, error: 'No address provided' });
+    }
+
+    try {
+      const geocoder = new window.google.maps.Geocoder();
+      geocoder.geocode({ address: clean }, (results, status) => {
+        if (status === 'OK' && Array.isArray(results) && results.length > 0) {
+          const top = results[0];
+          const lat = top.geometry.location.lat();
+          const lng = top.geometry.location.lng();
+          const locType = top.geometry.location_type;
+          const isExact = locType === 'ROOFTOP' || locType === 'RANGE_INTERPOLATED';
+
+          const suggestions = results.map((r, i) => {
+            const rLat = r.geometry.location.lat();
+            const rLng = r.geometry.location.lng();
+            const rExact = r.geometry.location_type === 'ROOFTOP' || r.geometry.location_type === 'RANGE_INTERPOLATED';
+            return {
+              id: r.place_id || `${i}_${rLat}_${rLng}`,
+              lat: rLat,
+              lng: rLng,
+              displayName: r.formatted_address,
+              shortName: r.formatted_address.split(',')[0],
+              precision: rExact ? 'exact' : 'approximate',
+              matchedQuery: r.formatted_address,
+              type: r.types?.[0] || 'geocode'
+            };
+          });
+
+          resolve({
+            success: true,
+            lat,
+            lng,
+            formattedAddress: top.formatted_address,
+            precision: isExact ? 'exact' : 'approximate',
+            locationType: locType,
+            matchedQuery: top.formatted_address,
+            suggestions,
+            results: suggestions
+          });
+        } else if (status === 'ZERO_RESULTS') {
+          resolve({
+            success: false,
+            notFound: true,
+            status,
+            error: `Could not find "${clean}" on Google Maps. Please refine the street address or manually pin your location.`
+          });
+        } else {
+          resolve({
+            success: false,
+            status,
+            error: `Google Geocoding error (${status || 'UNKNOWN'}).`
+          });
+        }
+      });
+    } catch (err) {
+      resolve({ success: false, error: err.message || 'Google geocoding failed' });
+    }
+  });
+}
+
+/**
+ * Reverse-geocodes coordinates into an address string using Google Maps Geocoder API.
+ *
+ * @param {number} lat
+ * @param {number} lng
+ * @returns {Promise<{ success: boolean, formattedAddress?: string, error?: string }>}
+ */
+export function reverseGeocodeWithGoogle(lat, lng) {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined' || !window.google?.maps?.Geocoder) {
+      return resolve({ success: false, error: 'Google Maps Geocoder is not loaded' });
+    }
+    try {
+      const geocoder = new window.google.maps.Geocoder();
+      geocoder.geocode({ location: { lat: Number(lat), lng: Number(lng) } }, (results, status) => {
+        if (status === 'OK' && Array.isArray(results) && results.length > 0) {
+          resolve({
+            success: true,
+            formattedAddress: results[0].formatted_address,
+            results
+          });
+        } else {
+          resolve({
+            success: false,
+            error: `Reverse geocode failed (${status || 'UNKNOWN'})`
+          });
+        }
+      });
+    } catch (err) {
+      resolve({ success: false, error: err.message || 'Google reverse geocode failed' });
+    }
+  });
+}
+
+/**
+ * Reverse-geocodes coordinates using OpenStreetMap Nominatim.
+ *
+ * @param {number} lat
+ * @param {number} lng
+ * @returns {Promise<{ success: boolean, formattedAddress?: string, error?: string }>}
+ */
+export async function reverseGeocodeWithNominatim(lat, lng) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&zoom=18&addressdetails=1`;
+    const response = await fetch(url, {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'PharmaTrack-App/1.0 (Patient Location Reverse Geocoder)'
+      }
+    });
+    if (!response.ok) return { success: false, error: 'Nominatim reverse geocode failed' };
+    const data = await response.json();
+    if (data && data.display_name) {
+      return {
+        success: true,
+        formattedAddress: data.display_name,
+        addressDetails: data.address
+      };
+    }
+    return { success: false, error: 'No address found for these coordinates' };
+  } catch (err) {
+    return { success: false, error: err.message || 'Reverse geocoding network error' };
+  }
+}
+
+/**
+ * Unified reverse-geocoding helper: prefers Google Maps if active, falls back to Nominatim.
+ *
+ * @param {number} lat
+ * @param {number} lng
+ * @returns {Promise<{ success: boolean, formattedAddress?: string, source?: string, error?: string }>}
+ */
+export async function reverseGeocodeUnified(lat, lng) {
+  if (typeof window !== 'undefined' && window.google?.maps?.Geocoder) {
+    try {
+      const googleRes = await reverseGeocodeWithGoogle(lat, lng);
+      if (googleRes.success && googleRes.formattedAddress) {
+        return { ...googleRes, source: 'google' };
+      }
+    } catch {
+      // Fall through to Nominatim
+    }
+  }
+  const nominatimRes = await reverseGeocodeWithNominatim(lat, lng);
+  return { ...nominatimRes, source: 'nominatim' };
+}
+
+/**
+ * Unified forward-geocoding helper: prefers Google Maps Geocoder if loaded, falls back to progressive OpenStreetMap.
+ * When an address is not found, does NOT silently replace with broad city coordinates.
+ *
+ * @param {string} rawAddress
+ * @returns {Promise<{
+ *   success: boolean,
+ *   lat?: number,
+ *   lng?: number,
+ *   precision?: string,
+ *   matchedQuery?: string,
+ *   results?: Array<object>,
+ *   suggestions?: Array<object>,
+ *   error?: string
+ * }>}
+ */
+export async function geocodeAddressUnified(rawAddress) {
+  const clean = String(rawAddress || '').trim();
+  if (!clean) {
+    return {
+      success: false,
+      error: 'Please enter an address to find on the map.',
+      results: []
+    };
+  }
+
+  // 1. If Google Maps Geocoder is available, attempt Google Geocoding first
+  if (typeof window !== 'undefined' && window.google?.maps?.Geocoder) {
+    try {
+      const googleRes = await geocodeAddressWithGoogle(clean);
+      if (googleRes.success) {
+        return googleRes;
+      }
+      // If Google explicitly returned ZERO_RESULTS, do not guess broad coordinates
+      if (googleRes.notFound) {
+        return googleRes;
+      }
+    } catch {
+      // Fall through to OpenStreetMap search
+    }
+  }
+
+  // 2. OpenStreetMap progressive geocoding fallback
+  const osmRes = await searchAddressWithFallback(clean);
+  if (osmRes.success && osmRes.results?.length > 0) {
+    const top = osmRes.results[0];
+    return {
+      success: true,
+      lat: top.lat,
+      lng: top.lng,
+      precision: top.precision,
+      matchedQuery: top.matchedQuery || top.displayName,
+      results: osmRes.results,
+      suggestions: osmRes.results,
+      source: 'nominatim'
+    };
+  }
+
+  return {
+    success: false,
+    error: osmRes.error || `Could not find "${clean}" on the map. Please refine the street address or manually pin your location.`,
+    results: []
+  };
+}

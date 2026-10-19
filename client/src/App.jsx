@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import Patient from './Patient.jsx';
 import Dashboard from './Dashboard.jsx';
+import PharmacyHeroIllustration from './PharmacyHeroIllustration.jsx';
 import './styles.css';
 
 const SOCKET_URL = import.meta.env.VITE_API_URL?.replace(/\/api\/?$/, '') || 'http://localhost:5000';
@@ -56,27 +57,100 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-  <button className="brand" onClick={() => setScreen('home')}>
-    <img
-      src="/pharmatrack-logo.png"
-      alt="PharmaTrack"
-      className="brand-logo"
-    />
-  </button>
-
-  <span className="tagline">Find medicine before you visit.</span>
-</header>
+        <button className="brand" onClick={() => setScreen('home')} aria-label="PharmaTrack Home">
+          <div className="brand-logo-frame">
+            <img
+              src="/pharmatrack-logo.png"
+              alt="PharmaTrack"
+              className="brand-logo"
+            />
+          </div>
+        </button>
+      </header>
 
       <main className="landing">
-        <section className="hero">
-          <p className="eyebrow">REAL-TIME PHARMACY AVAILABILITY</p>
-          <h1>Find your medicine.<br /><span>Reserve before you go.</span></h1>
-          <p className="hero-copy">Search nearby pharmacies, check live stock, see distance on Google Maps, and reserve your medicine before leaving home.</p>
+        <section className="hero-section">
+          <div className="hero-content">
+            <h1 className="hero-heading">
+              <span className="hero-main-line">Find your medicine.</span>
+              <span className="hero-subheading">Reserve before you go.</span>
+            </h1>
+            <p className="hero-description">
+              Search nearby pharmacies, check live medicine availability, and reserve before leaving home.
+            </p>
+          </div>
+
+          <div className="hero-visual">
+            <PharmacyHeroIllustration />
+          </div>
         </section>
 
         <section className="role-grid">
-          <RoleCard icon="👤" title="Patient / User" text="Search nearby medicines, compare availability and reserve stock." onClick={() => setScreen('patient-auth')} />
-          <RoleCard icon="🏥" title="Pharmacy" text="Manage your inventory and receive patient reservations in real time." onClick={() => setScreen('pharmacy-auth')} />
+          <RoleCard
+            icon="👤"
+            badge="Patient Portal"
+            title="Patient / User"
+            text="Search nearby medicines, compare availability and reserve stock."
+            onClick={() => setScreen('patient-auth')}
+          />
+          <RoleCard
+            icon="🏥"
+            badge="Partner Portal"
+            title="Pharmacy"
+            text="Manage your inventory and receive patient reservations in real time."
+            onClick={() => setScreen('pharmacy-auth')}
+          />
+        </section>
+
+        <section className="how-it-works-section">
+          <div className="how-header">
+            <span className="how-eyebrow">SIMPLE 3-STEP PROCESS</span>
+            <h2 className="how-title">How PharmaTrack Works</h2>
+          </div>
+
+          <div className="steps-grid">
+            <div className="step-card">
+              <div className="step-header">
+                <span className="step-number">STEP 01</span>
+                <div className="step-icon-wrap" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                  </svg>
+                </div>
+              </div>
+              <h3 className="step-title">Search Medicine</h3>
+              <p className="step-desc">Find the medicine you need.</p>
+            </div>
+
+            <div className="step-card">
+              <div className="step-header">
+                <span className="step-number">STEP 02</span>
+                <div className="step-icon-wrap" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                    <circle cx="12" cy="10" r="3"></circle>
+                  </svg>
+                </div>
+              </div>
+              <h3 className="step-title">Find Nearby Pharmacy</h3>
+              <p className="step-desc">Check location and live stock availability.</p>
+            </div>
+
+            <div className="step-card">
+              <div className="step-header">
+                <span className="step-number">STEP 03</span>
+                <div className="step-icon-wrap" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 11l3 3L22 4"></path>
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                  </svg>
+                </div>
+              </div>
+              <h3 className="step-title">Reserve &amp; Collect</h3>
+              <p className="step-desc">Reserve medicine before visiting the pharmacy.</p>
+            </div>
+          </div>
         </section>
 
         {screen === 'patient-auth' && <AuthCard role="patient" onLogin={login} onClose={() => setScreen('home')} />}
@@ -86,8 +160,22 @@ export default function App() {
   );
 }
 
-function RoleCard({ icon, title, text, onClick }) {
-  return <button className="role-card" onClick={onClick}><div className="role-icon">{icon}</div><h2>{title}</h2><p>{text}</p><span className="role-link">Continue →</span></button>;
+function RoleCard({ icon, badge, title, text, onClick }) {
+  return (
+    <button type="button" className="role-card" onClick={onClick}>
+      <div className="role-card-header">
+        <div className="role-icon-box">{icon}</div>
+        {badge && <span className="role-badge">{badge}</span>}
+      </div>
+      <h2>{title}</h2>
+      <p>{text}</p>
+      <div className="role-footer">
+        <span className="role-link">
+          Continue <span className="arrow">→</span>
+        </span>
+      </div>
+    </button>
+  );
 }
 
 function AuthCard({ role, onLogin, onClose }) {

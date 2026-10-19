@@ -86,6 +86,8 @@ export default function Dashboard({ auth, socket, onLogout }) {
   const [stock, setStock] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [stockFilter, setStockFilter] = useState('all');
+  const [inventorySubView, setInventorySubView] = useState('list'); // 'list' | 'form'
+  const [inventorySuccessMsg, setInventorySuccessMsg] = useState('');
   const [profile, setProfile] = useState(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [view, setView] = useState(() => (isOwner ? 'branches' : 'dashboard'));
@@ -146,6 +148,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
   const [loadingTransfers, setLoadingTransfers] = useState(false);
   const [transferErr, setTransferErr] = useState('');
   const [transferSuccess, setTransferSuccess] = useState('');
+  const [transferSubView, setTransferSubView] = useState('history'); // 'history' | 'request'
   const [transferStatusFilter, setTransferStatusFilter] = useState('all');
   const [transferDirectionFilter, setTransferDirectionFilter] = useState('all');
   const [availableOtherStock, setAvailableOtherStock] = useState([]);
@@ -178,6 +181,10 @@ export default function Dashboard({ auth, socket, onLogout }) {
   const [activityLogsErr, setActivityLogsErr] = useState('');
   const [activityCategoryFilter, setActivityCategoryFilter] = useState('all');
   const [activityActorFilter, setActivityActorFilter] = useState('all');
+  const [activityDateFilter, setActivityDateFilter] = useState('all');
+  const [activitySearchQuery, setActivitySearchQuery] = useState('');
+  const [expandedActivityIds, setExpandedActivityIds] = useState({});
+  const [refreshSuccessNotice, setRefreshSuccessNotice] = useState(false);
   const [activitySkip, setActivitySkip] = useState(0);
   const [hasMoreActivities, setHasMoreActivities] = useState(true);
   const [loadingMoreActivities, setLoadingMoreActivities] = useState(false);
@@ -295,7 +302,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
   const filteredActivityLogs = useMemo(() => {
     return activityLogs.filter(log => {
-      // Category filter
+      // 1. Category filter
       if (activityCategoryFilter === 'inventory') {
         const isInv = log.targetEntityType === 'Stock' ||
           (log.actionType && (log.actionType.startsWith('medicine_') || log.actionType.startsWith('stock_')));
@@ -310,7 +317,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
         if (!isTrf) return false;
       }
 
-      // Actor filter
+      // 2. Actor filter
       if (activityActorFilter === 'owner') {
         const isOwnerActor = log.actor?.actorType === 'Owner' || log.actor?.role === 'pharmacy';
         if (!isOwnerActor) return false;
@@ -319,9 +326,50 @@ export default function Dashboard({ auth, socket, onLogout }) {
         if (!isStaffActor) return false;
       }
 
+      // 3. Date Range Filter
+      if (activityDateFilter !== 'all') {
+        const logTime = new Date(log.createdAt).getTime();
+        const now = Date.now();
+        if (activityDateFilter === 'today') {
+          const oneDay = 24 * 60 * 60 * 1000;
+          if (now - logTime > oneDay) return false;
+        } else if (activityDateFilter === '7days') {
+          const sevenDays = 7 * 24 * 60 * 60 * 1000;
+          if (now - logTime > sevenDays) return false;
+        } else if (activityDateFilter === '30days') {
+          const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+          if (now - logTime > thirtyDays) return false;
+        }
+      }
+
+      // 4. Search Query Filter
+      if (activitySearchQuery && activitySearchQuery.trim()) {
+        const q = activitySearchQuery.trim().toLowerCase();
+        const desc = (log.description || '').toLowerCase();
+        const actorName = (log.actor?.displayName || '').toLowerCase();
+        const actorRole = (log.actor?.actorType || log.actor?.role || '').toLowerCase();
+        const med = (log.details?.medicine || '').toLowerCase();
+        const reason = (log.details?.reason || '').toLowerCase();
+        const patient = (log.details?.patientName || '').toLowerCase();
+        const action = (log.actionType || '').toLowerCase().replace(/_/g, ' ');
+        const meta = getActivityActionMeta(log.actionType);
+        const metaLabel = (meta.label || '').toLowerCase();
+
+        const match = desc.includes(q) ||
+          actorName.includes(q) ||
+          actorRole.includes(q) ||
+          med.includes(q) ||
+          reason.includes(q) ||
+          patient.includes(q) ||
+          action.includes(q) ||
+          metaLabel.includes(q);
+
+        if (!match) return false;
+      }
+
       return true;
     });
-  }, [activityLogs, activityCategoryFilter, activityActorFilter]);
+  }, [activityLogs, activityCategoryFilter, activityActorFilter, activityDateFilter, activitySearchQuery]);
 
   const categoryCounts = useMemo(() => {
     let inv = 0;
@@ -338,6 +386,45 @@ export default function Dashboard({ auth, socket, onLogout }) {
     }
     return { all: activityLogs.length, inventory: inv, reservations: resvCount, transfers: trf };
   }, [activityLogs]);
+
+  const toggleExpandActivity = (id) => {
+    setExpandedActivityIds(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
+
+  const expandAllActivities = () => {
+    const all = {};
+    filteredActivityLogs.forEach(l => { all[l._id] = true; });
+    setExpandedActivityIds(all);
+  };
+
+  const collapseAllActivities = () => {
+    setExpandedActivityIds({});
+  };
+
+  const handleClearActivityFilters = () => {
+    setActivityCategoryFilter('all');
+    setActivityActorFilter('all');
+    setActivityDateFilter('all');
+    setActivitySearchQuery('');
+  };
+
+  const hasActiveActivityFilters = activityCategoryFilter !== 'all' ||
+    activityActorFilter !== 'all' ||
+    activityDateFilter !== 'all' ||
+    Boolean(activitySearchQuery.trim());
+
+  const handleRefreshActivities = async () => {
+    if (!activeBranch?._id || loadingActivityLogs) return;
+    setRefreshSuccessNotice(false);
+    await loadActivityLogs(activeBranch._id, 0, false);
+    setRefreshSuccessNotice(true);
+    setTimeout(() => {
+      setRefreshSuccessNotice(false);
+    }, 3000);
+  };
 
   const loadActivityLogs = async (branchId, skip = 0, isAppend = false) => {
     if (!isOwner || !branchId) return;
@@ -476,6 +563,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
       setTransferSuccess(`Transfer request for ${qty} units of "${res.medicine}" created with status "pending".`);
       setSelectedTransferCandidate(null);
       setTransferRequestQty('');
+      setTransferSubView('history');
       await loadTransfers();
       await loadAvailableStock(searchTransferQuery);
       setTimeout(() => setTransferSuccess(''), 5000);
@@ -754,6 +842,9 @@ export default function Dashboard({ auth, socket, onLogout }) {
     setSelectedBranchId(nextBranchId);
     localStorage.setItem('pf_selected_branch_' + auth.id, nextBranchId);
     setItem(blank);
+    setInventorySubView('list');
+    setTransferSubView('history');
+    setInventorySuccessMsg('');
     await load(nextBranchId);
     if (isOwner && view === 'branches') {
       setView('dashboard');
@@ -766,6 +857,9 @@ export default function Dashboard({ auth, socket, onLogout }) {
     setSelectedBranchId(branchId);
     localStorage.setItem('pf_selected_branch_' + auth.id, branchId);
     setItem(blank);
+    setInventorySubView('list');
+    setTransferSubView('history');
+    setInventorySuccessMsg('');
     load(branchId);
     setView(targetSubView);
     setPreviousOwnerView(targetSubView);
@@ -1320,6 +1414,29 @@ export default function Dashboard({ auth, socket, onLogout }) {
     return parseCoordinates(profile?.location);
   }, [editingAddress, selectedLocation, profile?.location]);
 
+  const handleOpenAddMedicine = () => {
+    setItem(blank);
+    setErr('');
+    setInventorySuccessMsg('');
+    setInventorySubView('form');
+  };
+
+  const handleOpenEditMedicine = (s) => {
+    setItem({
+      ...s,
+      price: s.price ?? ''
+    });
+    setErr('');
+    setInventorySuccessMsg('');
+    setInventorySubView('form');
+  };
+
+  const handleCancelInventoryForm = () => {
+    setItem(blank);
+    setErr('');
+    setInventorySubView('list');
+  };
+
   const save = async e => {
     e.preventDefault();
     setBusy(true);
@@ -1330,7 +1447,16 @@ export default function Dashboard({ auth, socket, onLogout }) {
         payload.branchId = selectedBranchId;
       }
       await api('/pharmacy/stock', { method: 'PUT', token, body: payload });
+      const savedMedName = item.medicine ? item.medicine.trim() : 'Medicine';
+      const wasEditing = Boolean(item._id);
       setItem(blank);
+      setInventorySubView('list');
+      setInventorySuccessMsg(
+        wasEditing
+          ? `Successfully updated "${savedMedName}".`
+          : `Successfully added "${savedMedName}" to inventory.`
+      );
+      setTimeout(() => setInventorySuccessMsg(''), 5000);
       await load(selectedBranchId);
     } catch (e2) {
       setErr(e2.message);
@@ -1384,11 +1510,13 @@ export default function Dashboard({ auth, socket, onLogout }) {
     <div className="app-shell">
       <header className="topbar pharmacy-topbar">
         <div className="brand">
-          <img
-            src="/pharmatrack-logo.png"
-            alt="PharmaTrack"
-            className="brand-logo"
-          />
+          <div className="brand-logo-frame">
+            <img
+              src="/pharmatrack-logo.png"
+              alt="PharmaTrack"
+              className="brand-logo"
+            />
+          </div>
         </div>
 
         <nav className="pharmacy-nav" aria-label="Pharmacy navigation">
@@ -1413,7 +1541,12 @@ export default function Dashboard({ auth, socket, onLogout }) {
                   <button
                     type="button"
                     className={view === 'dashboard' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
-                    onClick={() => setView('dashboard')}
+                    onClick={() => {
+                      setView('dashboard');
+                      setInventorySubView('list');
+                      setInventorySuccessMsg('');
+                      setErr('');
+                    }}
                   >
                     Inventory
                   </button>
@@ -1435,6 +1568,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                     className={view === 'transfers' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
                     onClick={() => {
                       setView('transfers');
+                      setTransferSubView('history');
                       loadTransfers();
                       loadAvailableStock();
                     }}
@@ -1480,7 +1614,12 @@ export default function Dashboard({ auth, socket, onLogout }) {
               <button
                 type="button"
                 className={view === 'dashboard' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
-                onClick={() => setView('dashboard')}
+                onClick={() => {
+                  setView('dashboard');
+                  setInventorySubView('list');
+                  setInventorySuccessMsg('');
+                  setErr('');
+                }}
               >
                 Inventory
               </button>
@@ -1502,6 +1641,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                 className={view === 'transfers' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
                 onClick={() => {
                   setView('transfers');
+                  setTransferSubView('history');
                   loadTransfers();
                   loadAvailableStock();
                 }}
@@ -1618,277 +1758,424 @@ export default function Dashboard({ auth, socket, onLogout }) {
               )}
             </div>
           </div>
-          <main className="content-wrap">
-            <div className="stats">
-              <div><strong>{stock.length}</strong><span>Medicines</span></div>
-              <div><strong>{totalStock}</strong><span>Total units</span></div>
-              <div
-                className="stat-reservations"
-                onClick={() => { setView('reservations'); load(); }}
-                role="button"
-                tabIndex={0}
-                style={{ cursor: 'pointer' }}
-                title="Click to view reservations"
-              >
-                <strong>{pending}</strong>
-                <span>Active reservations ↗</span>
-              </div>
-              <div><strong>{stock.filter(s => s.quantity > 0).length}</strong><span>In stock</span></div>
-            </div>
-            {err && <p className="note">{err}</p>}
-            <section className="panel inventory-panel">
-              <div className="panel-head">
-                <div>
-                  <p className="eyebrow">INVENTORY</p>
-                  <h2>Add or update stock</h2>
-                </div>
-              </div>
-              <form onSubmit={save} className="form-grid">
-                <label>Medicine name<input value={item.medicine} onChange={e => setItem({ ...item, medicine: e.target.value })} placeholder="Paracetamol 500mg" required /></label>
-                <label>Generic name<input value={item.generic} onChange={e => setItem({ ...item, generic: e.target.value })} placeholder="Paracetamol" /></label>
-                <div className="two-col"><label>Quantity<input type="number" min="0" value={item.quantity} onChange={e => setItem({ ...item, quantity: Number(e.target.value) })} /></label><label>Price per tablet/unit (₹)<input type="number" min="0" step="0.01" value={item.price} onChange={e => setItem({ ...item, price: e.target.value })} placeholder="2.00" /></label></div>
-                <button disabled={busy}>
-                  {busy ? 'Saving…' : item._id ? 'Update Stock' : 'Add Medicine'}
+          {inventorySubView === 'form' ? (
+            <main className="content-wrap inventory-form-view-wrap">
+              <div className="inventory-view-top-bar">
+                <button
+                  type="button"
+                  className="btn-back-to-inventory"
+                  onClick={handleCancelInventoryForm}
+                >
+                  ← Back to Inventory
                 </button>
-              </form>
-              <div className="inventory-list-section">
-                <div className="inventory-list-header">
-                  <div className="inventory-header-left">
-                    <h3 className="inventory-section-title">Medicine Inventory</h3>
-                    <span className="inventory-matches-count">
-                      {stock.length === 0
-                        ? '0 medicines'
-                        : filteredStock.length === stock.length
-                        ? `${stock.length} medicines total`
-                        : `${filteredStock.length} of ${stock.length} medicines matching`}
+              </div>
+
+              <section className="panel inventory-form-panel">
+                <div className="panel-head inventory-form-header">
+                  <div>
+                    <p className="eyebrow">{item._id ? 'INVENTORY MANAGEMENT' : 'NEW MEDICINE'}</p>
+                    <h2>{item._id ? 'Edit Medicine' : 'Add New Medicine'}</h2>
+                    <p className="inventory-form-subtext">
+                      {item._id
+                        ? `Update stock quantity, pricing, or details for "${item.medicine}".`
+                        : `Enter medicine details and current available stock quantity for ${activeBranch?.name || 'this branch'}.`}
+                    </p>
+                  </div>
+                  {item._id && (
+                    <span className="editing-medicine-pill">
+                      Editing: <strong>{item.medicine}</strong>
                     </span>
-                  </div>
-
-                  <div className="inventory-search-box">
-                    <svg className="inventory-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <circle cx="11" cy="11" r="8"></circle>
-                      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                    </svg>
-                    <input
-                      type="search"
-                      className="inventory-search-input"
-                      placeholder="Search medicine or generic name..."
-                      value={searchQuery}
-                      onChange={e => setSearchQuery(e.target.value)}
-                      aria-label="Search medicines by name or generic name"
-                    />
-                    {searchQuery && (
-                      <button
-                        type="button"
-                        className="search-clear-btn"
-                        onClick={() => setSearchQuery('')}
-                        title="Clear search"
-                        aria-label="Clear search"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="inventory-filter-tabs" role="tablist" aria-label="Stock status filters">
-                  <div className="filter-tabs-group">
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={stockFilter === 'all'}
-                      className={stockFilter === 'all' ? 'filter-tab-btn active' : 'filter-tab-btn'}
-                      onClick={() => setStockFilter('all')}
-                    >
-                      All Medicines
-                      <span className="filter-tab-count">{stock.length}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={stockFilter === 'in_stock'}
-                      className={stockFilter === 'in_stock' ? 'filter-tab-btn active filter-in-stock' : 'filter-tab-btn filter-in-stock'}
-                      onClick={() => setStockFilter('in_stock')}
-                    >
-                      In Stock
-                      <span className="filter-tab-count">{inStockCount}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={stockFilter === 'low_stock'}
-                      className={stockFilter === 'low_stock' ? 'filter-tab-btn active filter-low-stock' : 'filter-tab-btn filter-low-stock'}
-                      onClick={() => setStockFilter('low_stock')}
-                    >
-                      Low Stock
-                      <span className="filter-tab-count">{lowStockCount}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={stockFilter === 'out_of_stock'}
-                      className={stockFilter === 'out_of_stock' ? 'filter-tab-btn active filter-out-of-stock' : 'filter-tab-btn filter-out-of-stock'}
-                      onClick={() => setStockFilter('out_of_stock')}
-                    >
-                      Out of Stock
-                      <span className="filter-tab-count">{outOfStockCount}</span>
-                    </button>
-                  </div>
-
-                  {(searchQuery || stockFilter !== 'all') && (
-                    <button
-                      type="button"
-                      className="reset-filters-link"
-                      onClick={() => {
-                        setSearchQuery('');
-                        setStockFilter('all');
-                      }}
-                    >
-                      Reset filters
-                    </button>
                   )}
                 </div>
 
-                {loading ? (
-                  <div className="loading-state-box">
-                    <span className="loading-spinner" aria-hidden="true" />
-                    <span>Loading inventory stock...</span>
+                {err && (
+                  <div className="inventory-form-error" role="alert">
+                    <span className="inventory-error-icon" aria-hidden="true">⚠</span>
+                    <span>{err}</span>
                   </div>
-                ) : stock.length === 0 ? (
-                  <div className="empty empty-state-box">
-                    <div className="empty-state-icon" aria-hidden="true">
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
-                        <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
-                      </svg>
-                    </div>
-                    <h3 className="empty-state-title">No medicines in inventory</h3>
-                    <p className="empty-state-desc">
-                      Your pharmacy inventory is currently empty. Use the form above to add your first medicine and stock quantity.
-                    </p>
+                )}
+
+                <form onSubmit={save} className="inventory-form-container">
+                  <div className="inventory-form-field">
+                    <label htmlFor="inv-med-name">
+                      Medicine Name <span className="req-star">*</span>
+                    </label>
+                    <input
+                      id="inv-med-name"
+                      type="text"
+                      value={item.medicine}
+                      onChange={e => setItem({ ...item, medicine: e.target.value })}
+                      placeholder="e.g. Paracetamol 500mg"
+                      required
+                      autoFocus
+                    />
+                    <span className="field-hint">Enter the full brand or trade name with dosage strength</span>
                   </div>
-                ) : filteredStock.length === 0 ? (
-                  <div className="empty empty-state-box">
-                    <div className="empty-state-icon" aria-hidden="true">
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
-                      </svg>
+
+                  <div className="inventory-form-field">
+                    <label htmlFor="inv-med-generic">
+                      Generic / Chemical Name
+                    </label>
+                    <input
+                      id="inv-med-generic"
+                      type="text"
+                      value={item.generic}
+                      onChange={e => setItem({ ...item, generic: e.target.value })}
+                      placeholder="e.g. Paracetamol"
+                    />
+                    <span className="field-hint">Active chemical compound for patient searches</span>
+                  </div>
+
+                  <div className="inventory-form-two-col">
+                    <div className="inventory-form-field">
+                      <label htmlFor="inv-med-qty">
+                        Quantity in Stock <span className="req-star">*</span>
+                      </label>
+                      <input
+                        id="inv-med-qty"
+                        type="number"
+                        min="0"
+                        value={item.quantity}
+                        onChange={e => setItem({ ...item, quantity: Number(e.target.value) })}
+                        required
+                      />
+                      <span className="field-hint">Total available units/strips in stock</span>
                     </div>
-                    <h3 className="empty-state-title">No matching medicines found</h3>
-                    <p className="empty-state-desc">
-                      {searchQuery
-                        ? `No medicines match "${searchQuery}" with the selected filter.`
-                        : 'No medicines match the selected filter.'}
-                    </p>
+
+                    <div className="inventory-form-field">
+                      <label htmlFor="inv-med-price">
+                        Price per tablet / unit (₹)
+                      </label>
+                      <input
+                        id="inv-med-price"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={item.price}
+                        onChange={e => setItem({ ...item, price: e.target.value })}
+                        placeholder="e.g. 2.00"
+                      />
+                      <span className="field-hint">Selling price in rupees per unit</span>
+                    </div>
+                  </div>
+
+                  <div className="inventory-form-actions-bar">
+                    <button
+                      type="button"
+                      className="btn-inventory-cancel"
+                      onClick={handleCancelInventoryForm}
+                      disabled={busy}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn-inventory-submit"
+                      disabled={busy}
+                    >
+                      {busy ? 'Saving…' : item._id ? 'Update Medicine' : 'Add Medicine'}
+                    </button>
+                  </div>
+                </form>
+              </section>
+            </main>
+          ) : (
+            <main className="content-wrap">
+              <div className="stats">
+                <div><strong>{stock.length}</strong><span>Medicines</span></div>
+                <div><strong>{totalStock}</strong><span>Total units</span></div>
+                <div
+                  className="stat-reservations"
+                  onClick={() => { setView('reservations'); load(); }}
+                  role="button"
+                  tabIndex={0}
+                  style={{ cursor: 'pointer' }}
+                  title="Click to view reservations"
+                >
+                  <strong>{pending}</strong>
+                  <span>Active reservations ↗</span>
+                </div>
+                <div><strong>{stock.filter(s => s.quantity > 0).length}</strong><span>In stock</span></div>
+              </div>
+
+              {inventorySuccessMsg && (
+                <div className="inventory-success-alert" role="status">
+                  <div className="inventory-success-content">
+                    <span className="inventory-success-icon" aria-hidden="true">✓</span>
+                    <span className="inventory-success-text">{inventorySuccessMsg}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="inventory-alert-close-btn"
+                    onClick={() => setInventorySuccessMsg('')}
+                    aria-label="Dismiss message"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {err && <p className="note">{err}</p>}
+
+              <section className="panel inventory-panel">
+                <div className="inventory-list-section">
+                  <div className="inventory-list-header">
+                    <div className="inventory-header-left">
+                      <h3 className="inventory-section-title">Medicine Inventory</h3>
+                      <span className="inventory-matches-count">
+                        {stock.length === 0
+                          ? '0 medicines'
+                          : filteredStock.length === stock.length
+                          ? `${stock.length} medicines total`
+                          : `${filteredStock.length} of ${stock.length} medicines matching`}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="medicine-actions-toolbar" role="toolbar" aria-label="Medicine actions toolbar">
+                    <div className="inventory-search-box">
+                      <svg className="inventory-search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                      </svg>
+                      <input
+                        type="search"
+                        className="inventory-search-input"
+                        placeholder="Search by medicine or generic name..."
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        aria-label="Search by medicine or generic name"
+                      />
+                      {searchQuery && (
+                        <button
+                          type="button"
+                          className="search-clear-btn"
+                          onClick={() => setSearchQuery('')}
+                          title="Clear search"
+                          aria-label="Clear search"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      className="btn-add-medicine"
+                      onClick={handleOpenAddMedicine}
+                    >
+                      <svg className="btn-add-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                      </svg>
+                      <span>+ Add Medicine</span>
+                    </button>
+                  </div>
+
+                  <div className="inventory-filter-tabs" role="tablist" aria-label="Stock status filters">
+                    <div className="filter-tabs-group">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={stockFilter === 'all'}
+                        className={stockFilter === 'all' ? 'filter-tab-btn active' : 'filter-tab-btn'}
+                        onClick={() => setStockFilter('all')}
+                      >
+                        All Medicines
+                        <span className="filter-tab-count">{stock.length}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={stockFilter === 'in_stock'}
+                        className={stockFilter === 'in_stock' ? 'filter-tab-btn active filter-in-stock' : 'filter-tab-btn filter-in-stock'}
+                        onClick={() => setStockFilter('in_stock')}
+                      >
+                        In Stock
+                        <span className="filter-tab-count">{inStockCount}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={stockFilter === 'low_stock'}
+                        className={stockFilter === 'low_stock' ? 'filter-tab-btn active filter-low-stock' : 'filter-tab-btn filter-low-stock'}
+                        onClick={() => setStockFilter('low_stock')}
+                      >
+                        Low Stock
+                        <span className="filter-tab-count">{lowStockCount}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={stockFilter === 'out_of_stock'}
+                        className={stockFilter === 'out_of_stock' ? 'filter-tab-btn active filter-out-of-stock' : 'filter-tab-btn filter-out-of-stock'}
+                        onClick={() => setStockFilter('out_of_stock')}
+                      >
+                        Out of Stock
+                        <span className="filter-tab-count">{outOfStockCount}</span>
+                      </button>
+                    </div>
+
                     {(searchQuery || stockFilter !== 'all') && (
                       <button
                         type="button"
-                        className="btn-clear-search-filter"
+                        className="reset-filters-link"
                         onClick={() => {
                           setSearchQuery('');
                           setStockFilter('all');
                         }}
                       >
-                        Clear search & filters
+                        Reset filters
                       </button>
                     )}
                   </div>
-                ) : (
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Medicine</th>
-                          <th>Stock</th>
-                          <th>Status</th>
-                          <th>Price / tablet</th>
-                          <th>Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredStock.map(s => {
-                          const status = getStockStatus(s.quantity);
-                          const isOutOfStock = status === 'out_of_stock';
-                          const isLowStock = status === 'low_stock';
 
-                          return (
-                            <tr key={s._id}>
-                              <td>
-                                <span className="med-name-primary">{s.medicine}</span>
-                                <small>{s.generic || '—'}</small>
-                              </td>
-                              <td className={isOutOfStock ? 'low out-of-stock-text' : isLowStock ? 'low low-stock-text' : ''}>
-                                <strong>{s.quantity}</strong>
-                              </td>
-                              <td>
-                                <span className={`stock-badge ${isOutOfStock ? 'out-of-stock' : isLowStock ? 'low-stock' : 'in-stock'}`}>
-                                  <span className="stock-badge-dot" />
-                                  {isOutOfStock ? 'Out of Stock' : isLowStock ? 'Low Stock' : 'In Stock'}
-                                </span>
-                              </td>
-                              <td>
-                                ₹{s.price ?? '—'} / tablet
-                              </td>
-                              <td>
-                                <div className="stock-actions">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setItem({
-                                        ...s,
-                                        price: s.price ?? ''
-                                      })
-                                    }
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="delete-button"
-                                    onClick={async () => {
-                                      const confirmed = window.confirm(
-                                        `Delete ${s.medicine}? This cannot be undone.`
-                                      );
-                                      if (!confirmed) return;
-                                      try {
-                                        setErr('');
-                                        await api(`/pharmacy/stock/${s._id}`, {
-                                          method: 'DELETE',
-                                          token
-                                        });
-                                        if (item._id === s._id) {
-                                          setItem(blank);
+                  {loading ? (
+                    <div className="loading-state-box">
+                      <span className="loading-spinner" aria-hidden="true" />
+                      <span>Loading inventory stock...</span>
+                    </div>
+                  ) : stock.length === 0 ? (
+                    <div className="empty empty-state-box">
+                      <div className="empty-state-icon" aria-hidden="true">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+                          <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+                        </svg>
+                      </div>
+                      <h3 className="empty-state-title">No medicines in inventory</h3>
+                      <p className="empty-state-desc">
+                        Your pharmacy inventory is currently empty. Click "Add Medicine" to register your first medicine and stock quantity.
+                      </p>
+                      <button
+                        type="button"
+                        className="btn-add-medicine btn-empty-add"
+                        onClick={handleOpenAddMedicine}
+                      >
+                        + Add Medicine
+                      </button>
+                    </div>
+                  ) : filteredStock.length === 0 ? (
+                    <div className="empty empty-state-box">
+                      <div className="empty-state-icon" aria-hidden="true">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+                        </svg>
+                      </div>
+                      <h3 className="empty-state-title">No matching medicines found</h3>
+                      <p className="empty-state-desc">
+                        {searchQuery
+                          ? `No medicines match "${searchQuery}" with the selected filter.`
+                          : 'No medicines match the selected filter.'}
+                      </p>
+                      {(searchQuery || stockFilter !== 'all') && (
+                        <button
+                          type="button"
+                          className="btn-clear-search-filter"
+                          onClick={() => {
+                            setSearchQuery('');
+                            setStockFilter('all');
+                          }}
+                        >
+                          Clear search & filters
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Medicine</th>
+                            <th>Stock</th>
+                            <th>Status</th>
+                            <th>Price / tablet</th>
+                            <th>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredStock.map(s => {
+                            const status = getStockStatus(s.quantity);
+                            const isOutOfStock = status === 'out_of_stock';
+                            const isLowStock = status === 'low_stock';
+
+                            return (
+                              <tr key={s._id}>
+                                <td>
+                                  <span className="med-name-primary">{s.medicine}</span>
+                                  <small>{s.generic || '—'}</small>
+                                </td>
+                                <td className={isOutOfStock ? 'low out-of-stock-text' : isLowStock ? 'low low-stock-text' : ''}>
+                                  <strong>{s.quantity}</strong>
+                                </td>
+                                <td>
+                                  <span className={`stock-badge ${isOutOfStock ? 'out-of-stock' : isLowStock ? 'low-stock' : 'in-stock'}`}>
+                                    <span className="stock-badge-dot" />
+                                    {isOutOfStock ? 'Out of Stock' : isLowStock ? 'Low Stock' : 'In Stock'}
+                                  </span>
+                                </td>
+                                <td>
+                                  ₹{s.price ?? '—'} / tablet
+                                </td>
+                                <td>
+                                  <div className="stock-actions">
+                                    <button
+                                      type="button"
+                                      className="btn-edit-stock"
+                                      onClick={() => handleOpenEditMedicine(s)}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="delete-button"
+                                      onClick={async () => {
+                                        const confirmed = window.confirm(
+                                          `Delete ${s.medicine}? This cannot be undone.`
+                                        );
+                                        if (!confirmed) return;
+                                        try {
+                                          setErr('');
+                                          await api(`/pharmacy/stock/${s._id}`, {
+                                            method: 'DELETE',
+                                            token
+                                          });
+                                          if (item._id === s._id) {
+                                            setItem(blank);
+                                          }
+                                          setInventorySuccessMsg(`Successfully deleted "${s.medicine}".`);
+                                          setTimeout(() => setInventorySuccessMsg(''), 5000);
+                                          await load(selectedBranchId);
+                                        } catch (e) {
+                                          setErr(e.message);
                                         }
-                                        await load();
-                                      } catch (e) {
-                                        setErr(e.message);
-                                      }
-                                    }}
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </section>
-          </main>
+                                      }}
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </section>
+            </main>
+          )}
         </>
       )}
 
       {view === 'reservations' && (
-        <>
+        <div className="reservations-page-container">
           {isOwner && (
-            <div className="branch-top-nav-bar">
+            <div className="branch-top-nav-bar reservations-top-nav-bar">
               <button
                 type="button"
                 className="btn-back-branches"
@@ -1901,7 +2188,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
               </button>
             </div>
           )}
-          <div className={`dashboard-head ${isOwner ? 'branch-dashboard-head' : ''}`}>
+          <div className={`dashboard-head ${isOwner ? 'branch-dashboard-head' : ''} reservations-dashboard-head`}>
             <div>
               <p className="eyebrow">{isOwner ? 'PHARMACY OWNER DASHBOARD' : 'PATIENT RESERVATIONS'}</p>
               <h1>{activeBranch?.name ? `${activeBranch.name} Reservations` : 'Manage Medicine Requests'}</h1>
@@ -1921,7 +2208,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
           </div>
           <main className="content-wrap pharmacy-reservations-view">
             {err && <p className="note">{err}</p>}
-            <section className="panel">
+            <section className="panel reservations-panel">
               <div className="panel-head reservations-panel-head">
                 <div>
                   <h2>Incoming Patient Reservations</h2>
@@ -2042,7 +2329,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
               )}
             </section>
           </main>
-        </>
+        </div>
       )}
 
       {view === 'branches' && isOwner && (
@@ -2223,10 +2510,28 @@ export default function Dashboard({ auth, socket, onLogout }) {
                 </p>
               )}
             </div>
-            <div className="reservations-meta-stats">
+            <div className="transfer-header-meta">
               <span className="reservations-count-pill">
                 <strong>{pendingTransfersCount}</strong> pending / {transfers.length} total
               </span>
+              {transferSubView === 'history' && (
+                <button
+                  type="button"
+                  className="btn-new-transfer"
+                  onClick={() => {
+                    setTransferSubView('request');
+                    setSelectedTransferCandidate(null);
+                    setSubmitTransferErr('');
+                    loadAvailableStock(searchTransferQuery);
+                  }}
+                >
+                  <svg className="btn-add-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                  </svg>
+                  <span>New Transfer</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -2239,8 +2544,24 @@ export default function Dashboard({ auth, socket, onLogout }) {
             )}
             {transferErr && <p className="note">{transferErr}</p>}
 
-            {/* 1. Request Stock from Other Branch Panel */}
-            <section className="transfer-card-box">
+            {transferSubView === 'request' ? (
+              <>
+                <div className="transfer-view-top-bar">
+                  <button
+                    type="button"
+                    className="btn-back-to-transfers"
+                    onClick={() => {
+                      setTransferSubView('history');
+                      setSelectedTransferCandidate(null);
+                      setSubmitTransferErr('');
+                    }}
+                  >
+                    ← Back to Transfers
+                  </button>
+                </div>
+
+                {/* 1. Request Stock from Other Branch Panel */}
+                <section className="transfer-card-box">
               <div className="panel-head">
                 <div>
                   <p className="eyebrow">NEW TRANSFER REQUEST</p>
@@ -2391,7 +2712,10 @@ export default function Dashboard({ auth, socket, onLogout }) {
                       <button
                         type="button"
                         className="btn-modal-cancel"
-                        onClick={() => setSelectedTransferCandidate(null)}
+                        onClick={() => {
+                          setSelectedTransferCandidate(null);
+                          setTransferSubView('history');
+                        }}
                       >
                         Cancel
                       </button>
@@ -2400,9 +2724,10 @@ export default function Dashboard({ auth, socket, onLogout }) {
                 </div>
               )}
             </section>
-
-            {/* 2. Transfer Requests History Panel */}
-            <section className="transfer-card-box">
+          </>
+        ) : (
+          /* 2. Transfer Requests History Panel */
+          <section className="transfer-card-box">
               <div className="panel-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '14px' }}>
                 <div>
                   <p className="eyebrow">TRANSFER LOG</p>
@@ -2504,7 +2829,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                   <p className="empty-state-desc">
                     {transferStatusFilter !== 'all' || transferDirectionFilter !== 'all'
                       ? 'No transfer requests match your active filters.'
-                      : 'No medicine transfer requests have been created yet. Use the search panel above to request stock.'}
+                      : 'No medicine transfer requests have been created yet. Click "+ New Transfer" above to request stock.'}
                   </p>
                 </div>
               ) : (
@@ -2654,6 +2979,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                 </div>
               )}
             </section>
+          )}
 
             {/* Confirmation Dialog Modal for Dispatch, Receipt, Rejection, and Cancellation */}
             {confirmModal && (
@@ -2961,64 +3287,70 @@ export default function Dashboard({ auth, socket, onLogout }) {
                 </div>
 
                 <div className="section-card-body">
-                  <div className="info-field">
-                    <span className="info-label">Branch Name</span>
-                    <span className="info-value name-highlight">{activeBranch.name}</span>
-                  </div>
-
-                  <div className="info-field">
-                    <span className="info-label">Branch Type</span>
-                    <span className="info-value">
-                      {activeBranch.isMain ? '★ Main Branch (Primary Headquarters)' : 'Secondary Branch'}
-                    </span>
-                  </div>
-
-                  <div className="info-field">
-                    <span className="info-label">Operating Status</span>
-                    <span className="info-value">
-                      <span className={`badge-active-status ${activeBranch.isActive !== false ? 'active' : 'inactive'}`}>
-                        {activeBranch.isActive !== false ? 'Active & Open' : 'Inactive'}
-                      </span>
-                    </span>
-                  </div>
-
-                  <div className="info-field">
-                    <span className="info-label">Contact Phone</span>
-                    <span className="info-value">{activeBranch.phone || 'Not specified'}</span>
-                  </div>
-
-                  <div className="info-field">
-                    <span className="info-label">Branch Address</span>
-                    <div className="address-display-box">
-                      <p className="info-value address-text">{activeBranch.address}</p>
-                      <button
-                        type="button"
-                        className="edit-address-button"
-                        onClick={() => openEditBranchModal(activeBranch)}
-                      >
-                        Edit Address
-                      </button>
+                  <div className="profile-rows-container">
+                    <div className="profile-field-row">
+                      <span className="profile-field-label">Branch Name:</span>
+                      <span className="profile-field-value name-highlight">{activeBranch.name}</span>
                     </div>
-                  </div>
 
-                  {activeBranch.location && parseCoordinates(activeBranch.location) && (
-                    <div className="info-field">
-                      <span className="info-label">Location Mapping</span>
-                      <div className="map-integration-box">
-                        <span className="coordinates-tag">
-                          📍 {parseCoordinates(activeBranch.location).lat.toFixed(6)}° N, {parseCoordinates(activeBranch.location).lng.toFixed(6)}° E
+                    <div className="profile-field-row">
+                      <span className="profile-field-label">Branch Type:</span>
+                      <span className="profile-field-value">
+                        {activeBranch.isMain ? '★ Main Branch (Primary Headquarters)' : 'Secondary Branch'}
+                      </span>
+                    </div>
+
+                    <div className="profile-field-row">
+                      <span className="profile-field-label">Operating Status:</span>
+                      <span className="profile-field-value">
+                        <span className={`badge-active-status ${activeBranch.isActive !== false ? 'active' : 'inactive'}`}>
+                          {activeBranch.isActive !== false ? 'Active & Open' : 'Inactive'}
                         </span>
-                        <a
-                          className="map-link-btn"
-                          href={`https://www.google.com/maps/dir/?api=1&destination=${parseCoordinates(activeBranch.location).lat},${parseCoordinates(activeBranch.location).lng}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Open in Google Maps ↗
-                        </a>
+                      </span>
+                    </div>
+
+                    <div className="profile-field-row">
+                      <span className="profile-field-label">Contact Phone:</span>
+                      <span className="profile-field-value">{activeBranch.phone || 'Not specified'}</span>
+                    </div>
+
+                    <div className="profile-field-row align-top">
+                      <span className="profile-field-label">Branch Address:</span>
+                      <div className="profile-field-value">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                          <span className="address-text">{activeBranch.address}</span>
+                          <button
+                            type="button"
+                            className="edit-address-button"
+                            onClick={() => openEditBranchModal(activeBranch)}
+                          >
+                            Edit Address
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  )}
+
+                    {activeBranch.location && parseCoordinates(activeBranch.location) && (
+                      <div className="profile-field-row align-top">
+                        <span className="profile-field-label">Location Mapping:</span>
+                        <div className="profile-field-value">
+                          <div className="map-integration-box">
+                            <span className="coordinates-tag">
+                              📍 {parseCoordinates(activeBranch.location).lat.toFixed(6)}° N, {parseCoordinates(activeBranch.location).lng.toFixed(6)}° E
+                            </span>
+                            <a
+                              className="map-link-btn"
+                              href={`https://www.google.com/maps/dir/?api=1&destination=${parseCoordinates(activeBranch.location).lat},${parseCoordinates(activeBranch.location).lng}`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open in Google Maps ↗
+                            </a>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </section>
 
@@ -3046,294 +3378,430 @@ export default function Dashboard({ auth, socket, onLogout }) {
               ← Back to Main Page
             </button>
           </div>
-          <div className="dashboard-head branch-dashboard-head">
-            <div>
-              <p className="eyebrow">PHARMACY OWNER DASHBOARD</p>
-              <h1>{activeBranch?.name ? `${activeBranch.name} Activity History` : 'Branch Activity History'}</h1>
+
+          <div className="dashboard-head branch-dashboard-head activity-dashboard-head">
+            <div className="activity-head-info">
+              <div className="activity-eyebrow-row">
+                <span className="eyebrow activity-eyebrow">PHARMACY OWNER AUDIT TRAIL</span>
+                {activeBranch?.isMain && <span className="branch-type-tag is-main">★ Main Branch</span>}
+                {!activeBranch?.isMain && activeBranch && <span className="branch-type-tag is-branch">Standard Branch</span>}
+              </div>
+              <h1 className="activity-page-title">
+                {activeBranch?.name ? activeBranch.name : 'Branch'}
+                <span className="activity-title-sub"> — Activity History</span>
+              </h1>
               {activeBranch && (
-                <p className="branch-active-subtitle">
-                  <span>📍 {activeBranch.address}</span>
-                  {activeBranch.isMain && <span className="badge-main-branch">★ Main Branch</span>}
-                  {activeBranch.phone && <span>• 📞 {activeBranch.phone}</span>}
-                </p>
+                <div className="activity-branch-meta">
+                  <span className="meta-item">📍 {activeBranch.address || 'Address not registered'}</span>
+                  {activeBranch.phone && (
+                    <>
+                      <span className="meta-sep">•</span>
+                      <span className="meta-item">📞 {activeBranch.phone}</span>
+                    </>
+                  )}
+                </div>
               )}
             </div>
-            <div>
+            <div className="activity-head-actions">
+              {refreshSuccessNotice && (
+                <span className="refresh-success-tag" role="status">
+                  ✓ Refreshed
+                </span>
+              )}
               <button
                 type="button"
-                className="btn-refresh-activity"
+                className={`btn-refresh-activity ${loadingActivityLogs ? 'is-loading' : ''}`}
                 disabled={loadingActivityLogs}
-                onClick={() => activeBranch?._id && resetAndLoadActivityLogs(activeBranch._id)}
+                onClick={handleRefreshActivities}
                 title="Refresh activities from server"
               >
-                {loadingActivityLogs ? 'Refreshing...' : '↻ Refresh History'}
+                <span className={`refresh-icon ${loadingActivityLogs ? 'spinning' : ''}`}>↻</span>
+                <span>{loadingActivityLogs ? 'Refreshing...' : 'Refresh History'}</span>
               </button>
             </div>
           </div>
 
           <main className="content-wrap activity-history-view">
             {activeBranch ? (
-              <section className="profile-section-card activity-section-card">
-                <div className="section-card-header">
-                  <span className="section-icon" aria-hidden="true">📜</span>
-                  <div>
-                    <h2>Branch Activity &amp; Audit History</h2>
-                    <p className="section-subtitle">
-                      Complete immutable record of inventory updates, reservations, and inter-branch transfers for {activeBranch.name}
-                    </p>
+              <div className="activity-dashboard-container">
+                {/* 1. Summary Cards (KPI Grid) */}
+                <div className="activity-summary-grid">
+                  <div
+                    className={`activity-summary-card ${activityCategoryFilter === 'all' ? 'active-card' : ''}`}
+                    onClick={() => setActivityCategoryFilter('all')}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === 'Enter' && setActivityCategoryFilter('all')}
+                    title="Click to view all activities"
+                  >
+                    <div className="summary-card-icon icon-total">📜</div>
+                    <div className="summary-card-content">
+                      <span className="summary-card-value">{categoryCounts.all}</span>
+                      <span className="summary-card-label">Total Activities</span>
+                    </div>
+                  </div>
+
+                  <div
+                    className={`activity-summary-card ${activityCategoryFilter === 'inventory' ? 'active-card' : ''}`}
+                    onClick={() => setActivityCategoryFilter(prev => prev === 'inventory' ? 'all' : 'inventory')}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === 'Enter' && setActivityCategoryFilter(prev => prev === 'inventory' ? 'all' : 'inventory')}
+                    title="Click to filter inventory changes"
+                  >
+                    <div className="summary-card-icon icon-inventory">📦</div>
+                    <div className="summary-card-content">
+                      <span className="summary-card-value">{categoryCounts.inventory}</span>
+                      <span className="summary-card-label">Inventory Changes</span>
+                    </div>
+                  </div>
+
+                  <div
+                    className={`activity-summary-card ${activityCategoryFilter === 'reservations' ? 'active-card' : ''}`}
+                    onClick={() => setActivityCategoryFilter(prev => prev === 'reservations' ? 'all' : 'reservations')}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === 'Enter' && setActivityCategoryFilter(prev => prev === 'reservations' ? 'all' : 'reservations')}
+                    title="Click to filter reservation activities"
+                  >
+                    <div className="summary-card-icon icon-reservations">📑</div>
+                    <div className="summary-card-content">
+                      <span className="summary-card-value">{categoryCounts.reservations}</span>
+                      <span className="summary-card-label">Reservation Events</span>
+                    </div>
+                  </div>
+
+                  <div
+                    className={`activity-summary-card ${activityCategoryFilter === 'transfers' ? 'active-card' : ''}`}
+                    onClick={() => setActivityCategoryFilter(prev => prev === 'transfers' ? 'all' : 'transfers')}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === 'Enter' && setActivityCategoryFilter(prev => prev === 'transfers' ? 'all' : 'transfers')}
+                    title="Click to filter transfer activities"
+                  >
+                    <div className="summary-card-icon icon-transfers">🔄</div>
+                    <div className="summary-card-content">
+                      <span className="summary-card-value">{categoryCounts.transfers}</span>
+                      <span className="summary-card-label">Transfer Activities</span>
+                    </div>
                   </div>
                 </div>
 
-                <div className="section-card-body">
-                  {/* Filters Bar */}
-                  <div className="activity-filter-bar">
-                    <div className="activity-filter-group">
-                      <span className="activity-filter-label">Category:</span>
-                      <div className="activity-filter-pills">
-                        <button
-                          type="button"
-                          className={`activity-filter-pill ${activityCategoryFilter === 'all' ? 'active' : ''}`}
-                          onClick={() => setActivityCategoryFilter('all')}
-                        >
-                          All ({categoryCounts.all})
-                        </button>
-                        <button
-                          type="button"
-                          className={`activity-filter-pill ${activityCategoryFilter === 'inventory' ? 'active' : ''}`}
-                          onClick={() => setActivityCategoryFilter('inventory')}
-                        >
-                          📦 Inventory ({categoryCounts.inventory})
-                        </button>
-                        <button
-                          type="button"
-                          className={`activity-filter-pill ${activityCategoryFilter === 'reservations' ? 'active' : ''}`}
-                          onClick={() => setActivityCategoryFilter('reservations')}
-                        >
-                          📑 Reservations ({categoryCounts.reservations})
-                        </button>
-                        <button
-                          type="button"
-                          className={`activity-filter-pill ${activityCategoryFilter === 'transfers' ? 'active' : ''}`}
-                          onClick={() => setActivityCategoryFilter('transfers')}
-                        >
-                          🔄 Transfers ({categoryCounts.transfers})
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="activity-filter-group">
-                      <span className="activity-filter-label">Actor:</span>
-                      <div className="activity-filter-pills">
-                        <button
-                          type="button"
-                          className={`activity-filter-pill ${activityActorFilter === 'all' ? 'active' : ''}`}
-                          onClick={() => setActivityActorFilter('all')}
-                        >
-                          👥 Everyone
-                        </button>
-                        <button
-                          type="button"
-                          className={`activity-filter-pill ${activityActorFilter === 'owner' ? 'active' : ''}`}
-                          onClick={() => setActivityActorFilter('owner')}
-                        >
-                          👑 Owner
-                        </button>
-                        <button
-                          type="button"
-                          className={`activity-filter-pill ${activityActorFilter === 'staff' ? 'active' : ''}`}
-                          onClick={() => setActivityActorFilter('staff')}
-                        >
-                          👤 Staff
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Filter Status Notice */}
-                  {activityLogs.length > 0 && (
-                    <div className="activity-filter-info-box">
-                      <span>
-                        Showing <strong>{filteredActivityLogs.length}</strong> of <strong>{activityLogs.length}</strong> loaded records for this branch.
-                        {hasMoreActivities ? ' (Filters apply to currently loaded records. Click "Load More" below to fetch older history.)' : ' (All branch records loaded.)'}
-                      </span>
-                      {(activityCategoryFilter !== 'all' || activityActorFilter !== 'all') && (
-                        <button
-                          type="button"
-                          className="btn-clear-activity-filters"
-                          onClick={() => {
-                            setActivityCategoryFilter('all');
-                            setActivityActorFilter('all');
-                          }}
-                        >
-                          Reset Filters
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Error Box */}
-                  {activityLogsErr && (
-                    <div className="error-box" style={{ marginBottom: '16px' }}>
-                      <p>{activityLogsErr}</p>
+                {/* 2. Compact Filter Toolbar */}
+                <div className="activity-toolbar-card">
+                  <div className="activity-search-field">
+                    <span className="search-icon" aria-hidden="true">🔍</span>
+                    <input
+                      type="text"
+                      className="activity-search-input"
+                      placeholder="Search by medicine, staff, action, or keywords..."
+                      value={activitySearchQuery}
+                      onChange={(e) => setActivitySearchQuery(e.target.value)}
+                    />
+                    {activitySearchQuery && (
                       <button
                         type="button"
-                        className="btn-retry-activity"
-                        onClick={() => activeBranch?._id && resetAndLoadActivityLogs(activeBranch._id)}
+                        className="btn-clear-search"
+                        onClick={() => setActivitySearchQuery('')}
+                        title="Clear search query"
                       >
-                        Try Again
+                        ✕
                       </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
 
-                  {/* Loading State */}
-                  {loadingActivityLogs && activityLogs.length === 0 && (
-                    <div className="activity-loading-state">
-                      <div className="spinner"></div>
-                      <p>Loading activity history for {activeBranch.name}...</p>
+                  <div className="activity-filters-cluster">
+                    <div className="activity-filter-select-wrap">
+                      <select
+                        id="actCategoryFilter"
+                        className="activity-toolbar-select"
+                        value={activityCategoryFilter}
+                        onChange={(e) => setActivityCategoryFilter(e.target.value)}
+                        aria-label="Filter by category"
+                      >
+                        <option value="all">All Categories ({categoryCounts.all})</option>
+                        <option value="inventory">📦 Inventory ({categoryCounts.inventory})</option>
+                        <option value="reservations">📑 Reservations ({categoryCounts.reservations})</option>
+                        <option value="transfers">🔄 Transfers ({categoryCounts.transfers})</option>
+                      </select>
                     </div>
-                  )}
 
-                  {/* Empty State - No records recorded yet */}
+                    <div className="activity-filter-select-wrap">
+                      <select
+                        id="actActorFilter"
+                        className="activity-toolbar-select"
+                        value={activityActorFilter}
+                        onChange={(e) => setActivityActorFilter(e.target.value)}
+                        aria-label="Filter by actor"
+                      >
+                        <option value="all">👥 Everyone</option>
+                        <option value="owner">👑 Owner</option>
+                        <option value="staff">👤 Staff</option>
+                      </select>
+                    </div>
+
+                    <div className="activity-filter-select-wrap">
+                      <select
+                        id="actDateFilter"
+                        className="activity-toolbar-select"
+                        value={activityDateFilter}
+                        onChange={(e) => setActivityDateFilter(e.target.value)}
+                        aria-label="Filter by timeframe"
+                      >
+                        <option value="all">🕒 All Time</option>
+                        <option value="today">📅 Today</option>
+                        <option value="7days">📅 Last 7 Days</option>
+                        <option value="30days">📅 Last 30 Days</option>
+                      </select>
+                    </div>
+
+                    {hasActiveActivityFilters && (
+                      <button
+                        type="button"
+                        className="btn-clear-all-filters"
+                        onClick={handleClearActivityFilters}
+                        title="Reset all search and filters"
+                      >
+                        ✕ Clear Filters
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Error Box */}
+                {activityLogsErr && (
+                  <div className="error-box" style={{ marginBottom: '12px' }}>
+                    <p>{activityLogsErr}</p>
+                    <button
+                      type="button"
+                      className="btn-retry-activity"
+                      onClick={() => activeBranch?._id && resetAndLoadActivityLogs(activeBranch._id)}
+                    >
+                      Try Again
+                    </button>
+                  </div>
+                )}
+
+                {/* Loading State */}
+                {loadingActivityLogs && activityLogs.length === 0 && (
+                  <div className="activity-loading-state">
+                    <div className="spinner"></div>
+                    <p>Loading activity audit records for {activeBranch.name}...</p>
+                  </div>
+                )}
+
+                {/* 3. Audit Records Card Container */}
+                <div className="activity-audit-card">
+                  <div className="activity-audit-header">
+                    <div className="activity-audit-count">
+                      <span className="audit-header-title">Audit Records</span>
+                      <span className="activity-count-badge">
+                        Showing <strong>{filteredActivityLogs.length}</strong> of <strong>{activityLogs.length}</strong>
+                      </span>
+                      {hasActiveActivityFilters && (
+                        <span className="filtered-tag">Filtered</span>
+                      )}
+                    </div>
+
+                    {filteredActivityLogs.length > 0 && (
+                      <div className="activity-expand-controls">
+                        <button
+                          type="button"
+                          className="btn-toggle-all-details"
+                          onClick={expandAllActivities}
+                        >
+                          Expand All Details
+                        </button>
+                        <span className="divider">•</span>
+                        <button
+                          type="button"
+                          className="btn-toggle-all-details"
+                          onClick={collapseAllActivities}
+                        >
+                          Collapse All
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Empty State: 0 total records */}
                   {!loadingActivityLogs && activityLogs.length === 0 && !activityLogsErr && (
                     <div className="empty empty-state-box activity-empty-box">
-                      <div className="empty-icon" style={{ fontSize: '2.4rem', marginBottom: '8px' }}>📜</div>
-                      <h3>No activities recorded for this branch yet.</h3>
+                      <div className="empty-icon">📜</div>
+                      <h3>No activities recorded for this branch yet</h3>
                       <p className="empty-subtext">
                         Actions performed on medicine inventory, reservations, and inter-branch stock transfers for {activeBranch.name} will be logged here automatically.
                       </p>
                     </div>
                   )}
 
-                  {/* Empty State - Filters returned 0 */}
+                  {/* Empty State: Filters returned 0 */}
                   {!loadingActivityLogs && activityLogs.length > 0 && filteredActivityLogs.length === 0 && (
                     <div className="empty empty-state-box activity-empty-box">
-                      <div className="empty-icon" style={{ fontSize: '2rem', marginBottom: '8px' }}>🔍</div>
-                      <h3>No activities match your filter selection</h3>
+                      <div className="empty-icon">🔍</div>
+                      <h3>No activities match your filters</h3>
                       <p className="empty-subtext">
-                        Try changing the category or actor filter above to see more loaded activities.
+                        Try adjusting your search terms, category, actor, or timeframe filters.
                       </p>
                       <button
                         type="button"
-                        className="btn-create-branch"
-                        style={{ marginTop: '12px' }}
-                        onClick={() => {
-                          setActivityCategoryFilter('all');
-                          setActivityActorFilter('all');
-                        }}
+                        className="btn-reset-filters-hero"
+                        onClick={handleClearActivityFilters}
                       >
-                        Clear Filters
+                        Reset All Filters
                       </button>
                     </div>
                   )}
 
-                  {/* Activity Timeline List */}
+                  {/* Audit Rows List */}
                   {filteredActivityLogs.length > 0 && (
-                    <div className="activity-timeline-list">
+                    <div className="activity-audit-list">
                       {filteredActivityLogs.map((log) => {
                         const meta = getActivityActionMeta(log.actionType);
                         const isOwnerActor = log.actor?.actorType === 'Owner' || log.actor?.role === 'pharmacy';
                         const details = log.details || {};
                         const formattedTime = formatActivityTime(log.createdAt);
+                        const isExpanded = Boolean(expandedActivityIds[log._id]);
 
                         return (
-                          <article key={log._id} className="activity-log-card">
-                            <div className="activity-log-header">
-                              <div className="activity-badge-group">
-                                <span className={`activity-action-badge ${meta.badgeClass}`}>
-                                  <span className="badge-icon">{meta.icon}</span>
-                                  {meta.label}
-                                </span>
-                                <span className={`activity-actor-badge ${isOwnerActor ? 'actor-owner' : 'actor-staff'}`}>
-                                  {isOwnerActor ? '👑' : '👤'} {log.actor?.displayName || (isOwnerActor ? 'Pharmacy Owner' : 'Branch Staff')}
-                                  <span className="actor-role-tag">({isOwnerActor ? 'Owner' : 'Staff'})</span>
-                                </span>
+                          <div key={log._id} className={`activity-audit-row ${isExpanded ? 'is-expanded' : ''}`}>
+                            <div className="activity-row-main">
+                              {/* Action Type Badge with Icon */}
+                              <div className={`activity-type-badge ${meta.badgeClass}`} title={meta.label}>
+                                <span className="type-icon">{meta.icon}</span>
+                                <span className="type-label">{meta.label}</span>
                               </div>
-                              <time className="activity-time" dateTime={log.createdAt} title={new Date(log.createdAt).toISOString()}>
-                                🕒 {formattedTime}
-                              </time>
+
+                              {/* Row Content Body */}
+                              <div className="activity-row-body">
+                                <div className="activity-row-desc">
+                                  <span className="activity-desc-text">{log.description}</span>
+                                </div>
+
+                                {/* Contextual Chips Strip */}
+                                <div className="activity-chips-strip">
+                                  {details.medicine && (
+                                    <span className="audit-chip chip-medicine" title="Affected Medicine">
+                                      💊 {details.medicine}
+                                    </span>
+                                  )}
+
+                                  {details.before?.quantity !== undefined && details.after?.quantity !== undefined && (
+                                    <span className="audit-chip chip-diff" title="Quantity Change">
+                                      📊 Stock: <strong className="diff-old">{details.before.quantity}</strong> → <strong className="diff-new">{details.after.quantity}</strong> units
+                                    </span>
+                                  )}
+
+                                  {details.before?.quantity === undefined && details.quantity !== undefined && (
+                                    <span className="audit-chip chip-qty" title="Quantity">
+                                      📦 Qty: <strong>{details.quantity}</strong> units
+                                    </span>
+                                  )}
+
+                                  {details.dispatchedQuantity !== undefined && (
+                                    <span className="audit-chip chip-qty" title="Dispatched Quantity">
+                                      🚚 Dispatched: <strong>{details.dispatchedQuantity}</strong> units
+                                    </span>
+                                  )}
+
+                                  {details.status && (
+                                    <span className="audit-chip chip-status" title="Status">
+                                      🏷️ Status: <strong>{details.status}</strong>
+                                    </span>
+                                  )}
+
+                                  {details.patientName && (
+                                    <span className="audit-chip chip-patient" title="Patient Name">
+                                      🧑‍🦱 Patient: <strong>{details.patientName}</strong>
+                                    </span>
+                                  )}
+
+                                  {details.supplyingBranch && details.receivingBranch && (
+                                    <span className="audit-chip chip-route" title="Transfer Route">
+                                      🔄 {details.supplyingBranchName || details.supplyingBranch?.name || 'Branch'} → {details.receivingBranchName || details.receivingBranch?.name || 'Branch'}
+                                    </span>
+                                  )}
+
+                                  {details.reason && (
+                                    <span className="audit-chip chip-reason" title="Reason">
+                                      💬 "{details.reason}"
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Actor, Timestamp & Expand Action */}
+                              <div className="activity-row-meta">
+                                <span className={`actor-badge ${isOwnerActor ? 'actor-owner' : 'actor-staff'}`}>
+                                  {isOwnerActor ? '👑' : '👤'} {log.actor?.displayName || (isOwnerActor ? 'Owner' : 'Staff')}
+                                  <span className="actor-role-note">({isOwnerActor ? 'Owner' : 'Staff'})</span>
+                                </span>
+
+                                <time className="audit-time" dateTime={log.createdAt} title={new Date(log.createdAt).toISOString()}>
+                                  🕒 {formattedTime}
+                                </time>
+
+                                <button
+                                  type="button"
+                                  className="btn-toggle-row-drawer"
+                                  onClick={() => toggleExpandActivity(log._id)}
+                                  aria-expanded={isExpanded}
+                                >
+                                  {isExpanded ? 'Details ▴' : 'Details ▾'}
+                                </button>
+                              </div>
                             </div>
 
-                            <p className="activity-description">
-                              {log.description}
-                            </p>
-
-                            {/* Contextual Details Strip */}
-                            <div className="activity-details-strip">
-                              {details.medicine && (
-                                <span className="activity-detail-chip chip-medicine" title="Affected Medicine">
-                                  💊 {details.medicine}
-                                </span>
-                              )}
-
-                              {details.before?.quantity !== undefined && details.after?.quantity !== undefined && (
-                                <span className="activity-detail-chip chip-diff" title="Quantity Change">
-                                  📊 Stock: <strong className="diff-old">{details.before.quantity}</strong> → <strong className="diff-new">{details.after.quantity}</strong> units
-                                </span>
-                              )}
-
-                              {details.before?.quantity === undefined && details.quantity !== undefined && (
-                                <span className="activity-detail-chip chip-qty" title="Quantity">
-                                  📦 Qty: <strong>{details.quantity}</strong> units
-                                </span>
-                              )}
-
-                              {details.dispatchedQuantity !== undefined && (
-                                <span className="activity-detail-chip chip-qty" title="Dispatched Quantity">
-                                  🚚 Dispatched: <strong>{details.dispatchedQuantity}</strong> units
-                                </span>
-                              )}
-
-                              {details.status && (
-                                <span className="activity-detail-chip chip-status" title="Status">
-                                  🏷️ Status: <strong>{details.status}</strong>
-                                </span>
-                              )}
-
-                              {details.patientName && (
-                                <span className="activity-detail-chip chip-patient" title="Patient Name">
-                                  🧑‍🦱 Patient: <strong>{details.patientName}</strong>
-                                </span>
-                              )}
-
-                              {details.supplyingBranch && details.receivingBranch && (
-                                <span className="activity-detail-chip chip-transfer-route" title="Transfer Route">
-                                  🔄 From <strong>{details.supplyingBranchName || details.supplyingBranch?.name || 'Supplying Branch'}</strong> → To <strong>{details.receivingBranchName || details.receivingBranch?.name || 'Receiving Branch'}</strong>
-                                </span>
-                              )}
-
-                              {details.reason && (
-                                <span className="activity-detail-chip chip-reason" title="Reason">
-                                  💬 Reason: <em>"{details.reason}"</em>
-                                </span>
-                              )}
-                            </div>
-                          </article>
+                            {/* Expandable Audit Details Drawer */}
+                            {isExpanded && (
+                              <div className="activity-row-drawer">
+                                <div className="drawer-grid">
+                                  <div className="drawer-item">
+                                    <span className="drawer-label">Record ID</span>
+                                    <code className="drawer-code">{log._id}</code>
+                                  </div>
+                                  <div className="drawer-item">
+                                    <span className="drawer-label">Target Entity</span>
+                                    <span className="drawer-value">{log.targetEntityType} ({log.targetEntityId || 'N/A'})</span>
+                                  </div>
+                                  <div className="drawer-item">
+                                    <span className="drawer-label">Actor ID &amp; Type</span>
+                                    <span className="drawer-value">{log.actor?.userId || 'N/A'} • {log.actor?.actorType || 'Owner'}</span>
+                                  </div>
+                                  <div className="drawer-item">
+                                    <span className="drawer-label">UTC Timestamp</span>
+                                    <span className="drawer-value">{new Date(log.createdAt).toISOString()}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         );
                       })}
                     </div>
                   )}
-
-                  {/* Pagination Section */}
-                  {activityLogs.length > 0 && (
-                    <div className="activity-pagination-footer">
-                      {hasMoreActivities ? (
-                        <button
-                          type="button"
-                          className="btn-load-more-activity"
-                          disabled={loadingMoreActivities}
-                          onClick={() => loadActivityLogs(activeBranch._id, activitySkip, true)}
-                        >
-                          {loadingMoreActivities ? 'Loading Older Activities...' : 'Load More Activities ↓'}
-                        </button>
-                      ) : (
-                        <div className="all-activities-loaded-badge">
-                          ✓ All {activityLogs.length} activity records loaded for {activeBranch.name}
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
-              </section>
+
+                {/* 4. Pagination Section */}
+                {activityLogs.length > 0 && (
+                  <div className="activity-pagination-footer">
+                    {hasMoreActivities ? (
+                      <button
+                        type="button"
+                        className="btn-load-more-activity"
+                        disabled={loadingMoreActivities}
+                        onClick={() => loadActivityLogs(activeBranch._id, activitySkip, true)}
+                      >
+                        {loadingMoreActivities ? 'Loading Older Activities...' : 'Load More Activities ↓'}
+                      </button>
+                    ) : (
+                      <div className="all-activities-loaded-badge">
+                        ✓ All {activityLogs.length} activity records loaded for {activeBranch.name}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             ) : (
               <div className="empty empty-state-box">
                 <p>No branch selected. Please return to the branch overview.</p>
@@ -3355,6 +3823,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
           if (returnView === 'reservations') {
             load();
           } else if (returnView === 'transfers') {
+            setTransferSubView('history');
             loadTransfers();
             loadAvailableStock();
           } else if (returnView === 'staff-management') {
@@ -3378,170 +3847,175 @@ export default function Dashboard({ auth, socket, onLogout }) {
     {err && <p className="note">{err}</p>}
 
     {isOwner ? (
-      <>
-        {/* Owner Profile Header Hero */}
-        <section className="pharmacy-profile-hero">
-          <div className="hero-avatar-wrap">
-            <span className="pharmacy-hero-avatar">
+      <div className="owner-unified-profile-container">
+        {/* Section 1: Owner Profile Header */}
+        <section className="owner-profile-header-card">
+          <div className="owner-avatar-wrap">
+            <span className="owner-hero-avatar">
               {(profile?.ownerName || profile?.name || auth.name || 'O').trim().charAt(0).toUpperCase()}
             </span>
           </div>
 
-          <div className="hero-meta-wrap">
-            <span className="pharmacy-account-badge">
-              <span className="badge-status-dot" aria-hidden="true"></span>
-              Pharmacy Owner Account
-            </span>
-            <h1 className="pharmacy-hero-title">
+          <div className="owner-header-meta">
+            <div className="owner-badge-row">
+              <span className="owner-account-badge">
+                <span className="badge-status-dot" aria-hidden="true"></span>
+                Pharmacy Owner Account
+              </span>
+            </div>
+            <h1 className="owner-header-title">
               {profile?.ownerName && profile.ownerName.trim() ? profile.ownerName.trim() : (profile?.name || auth.name)}
             </h1>
-            <p className="pharmacy-hero-subtitle">
+            <p className="owner-header-subtitle">
               {profile?.name ? `Owner & Administrator of ${profile.name}` : 'Pharmacy Owner'}
               {profile?.createdAt && ` • Registered since ${new Date(profile.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`}
             </p>
           </div>
         </section>
 
-        {/* Owner Profile Sections */}
-        <div className="pharmacy-profile-sections">
-          {/* 1. Owner & Account Details Card */}
-          <section className="profile-section-card">
-            <div className="section-card-header">
-              <span className="section-icon" aria-hidden="true">👤</span>
-              <div>
-                <h2>Owner &amp; Account Details</h2>
-                <p className="section-subtitle">Authenticated pharmacy owner profile and business credentials</p>
-              </div>
+        {/* Section 2: Owner & Account Details */}
+        <section className="owner-profile-section-card">
+          <div className="owner-card-header">
+            <span className="owner-section-icon" aria-hidden="true">👤</span>
+            <div>
+              <h2>Owner &amp; Account Details</h2>
+              <p className="owner-section-subtitle">Authenticated pharmacy owner profile and business credentials</p>
             </div>
+          </div>
 
-            <div className="section-card-body">
-              <div className="info-field">
-                <span className="info-label">Owner Name</span>
-                <span className="info-value">
-                  {profile?.ownerName && profile.ownerName.trim() ? (
-                    <strong>{profile.ownerName.trim()}</strong>
-                  ) : (
-                    <span className="muted" style={{ fontStyle: 'italic' }}>Not provided</span>
-                  )}
-                </span>
-              </div>
-
-              <div className="info-field">
-                <span className="info-label">Pharmacy / Business Name</span>
-                <span className="info-value name-highlight">
-                  {profile?.name || auth.name || 'Not specified'}
-                </span>
-              </div>
-
-              <div className="info-field">
-                <span className="info-label">Email Address</span>
-                <span className="info-value contact-value">
-                  <span className="field-icon" aria-hidden="true">✉️</span>
-                  {profile?.email || auth.email || 'Not specified'}
-                </span>
-              </div>
-
-              <div className="info-field">
-                <span className="info-label">Contact Number</span>
-                <span className="info-value contact-value">
-                  <span className="field-icon" aria-hidden="true">📞</span>
-                  {profile?.phone && profile.phone.trim() ? (
-                    profile.phone.trim()
-                  ) : (
-                    <span className="muted" style={{ fontStyle: 'italic' }}>Not provided</span>
-                  )}
-                </span>
-              </div>
-
-              <div className="info-field">
-                <span className="info-label">Account Role</span>
-                <span className="role-tag">Pharmacy Owner &amp; Administrator</span>
-              </div>
-            </div>
-          </section>
-
-          {/* 2. My Pharmacy Branches Card */}
-          <section className="profile-section-card" style={{ gridColumn: '1 / -1' }}>
-            <div className="section-card-header">
-              <span className="section-icon" aria-hidden="true">🏥</span>
-              <div>
-                <h2>My Pharmacy Branches</h2>
-                <p className="section-subtitle">
-                  All registered branch locations belonging to this pharmacy business
-                </p>
-              </div>
-              <span className="branches-total-pill" style={{ marginLeft: 'auto' }}>
-                <span>Total Branches:</span>
-                <strong>{branches.length}</strong>
+          <div className="profile-rows-container">
+            <div className="profile-field-row">
+              <span className="profile-field-label">Owner Name:</span>
+              <span className="profile-field-value">
+                {profile?.ownerName && profile.ownerName.trim() ? (
+                  <strong>{profile.ownerName.trim()}</strong>
+                ) : (
+                  <span className="muted" style={{ fontStyle: 'italic' }}>Not provided</span>
+                )}
               </span>
             </div>
 
-            <div className="section-card-body">
-              {loadingBranches ? (
-                <div className="loading-state-box">
-                  <span className="loading-spinner" aria-hidden="true" />
-                  <span>Loading registered branches...</span>
-                </div>
-              ) : branchListErr ? (
-                <p className="note">{branchListErr}</p>
-              ) : branches.length === 0 ? (
-                <div className="empty empty-state-box">
-                  <p className="empty-state-desc">No branches registered yet.</p>
-                </div>
-              ) : (
-                <div className="profile-branches-list">
-                  {branches.map(b => {
-                    const coords = parseCoordinates(b.location);
-                    return (
-                      <div key={b._id} className="profile-branch-item">
-                        <div className="profile-branch-header">
-                          <div className="profile-branch-title-group">
-                            <span aria-hidden="true">📍</span>
-                            <h3>{b.name}</h3>
-                          </div>
-                          <div className="branch-badges-group">
-                            {b.isMain ? (
-                              <span className="badge-main-branch">★ Main Branch</span>
+            <div className="profile-field-row">
+              <span className="profile-field-label">Pharmacy Name:</span>
+              <span className="profile-field-value name-highlight">
+                {profile?.name || auth.name || 'Not specified'}
+              </span>
+            </div>
+
+            <div className="profile-field-row">
+              <span className="profile-field-label">Account Role:</span>
+              <span className="profile-field-value">
+                <span className="owner-role-tag">Pharmacy Owner &amp; Administrator</span>
+              </span>
+            </div>
+
+            <div className="profile-field-row">
+              <span className="profile-field-label">Email Address:</span>
+              <span className="profile-field-value contact-value">
+                <span className="field-icon" aria-hidden="true">✉️</span>
+                {profile?.email || auth.email || 'Not specified'}
+              </span>
+            </div>
+
+            <div className="profile-field-row">
+              <span className="profile-field-label">Contact Phone:</span>
+              <span className="profile-field-value contact-value">
+                <span className="field-icon" aria-hidden="true">📞</span>
+                {profile?.phone && profile.phone.trim() ? (
+                  profile.phone.trim()
+                ) : (
+                  <span className="muted" style={{ fontStyle: 'italic' }}>Not provided</span>
+                )}
+              </span>
+            </div>
+
+            <div className="profile-field-row">
+              <span className="profile-field-label">Total Branches:</span>
+              <span className="profile-field-value">
+                <strong>{branches.length}</strong> {branches.length === 1 ? 'branch location' : 'branch locations'}
+              </span>
+            </div>
+          </div>
+        </section>
+
+        {/* Section 3: My Pharmacy Branches */}
+        <section className="owner-profile-section-card">
+          <div className="owner-card-header">
+            <span className="owner-section-icon" aria-hidden="true">🏥</span>
+            <div>
+              <h2>My Pharmacy Branches</h2>
+              <p className="owner-section-subtitle">
+                All registered branch locations belonging to this pharmacy business
+              </p>
+            </div>
+            <span className="branches-total-pill" style={{ marginLeft: 'auto' }}>
+              <span>Total Branches:</span>
+              <strong>{branches.length}</strong>
+            </span>
+          </div>
+
+          <div className="owner-branches-body">
+            {loadingBranches ? (
+              <div className="loading-state-box">
+                <span className="loading-spinner" aria-hidden="true" />
+                <span>Loading registered branches...</span>
+              </div>
+            ) : branchListErr ? (
+              <p className="note">{branchListErr}</p>
+            ) : branches.length === 0 ? (
+              <div className="empty empty-state-box">
+                <p className="empty-state-desc">No branches registered yet.</p>
+              </div>
+            ) : (
+              <div className="owner-branches-list">
+                {branches.map(b => {
+                  const coords = parseCoordinates(b.location);
+                  return (
+                    <div key={b._id} className="owner-branch-row">
+                      <div className="owner-branch-row-top">
+                        <div className="owner-branch-title-wrap">
+                          <span className="branch-icon" aria-hidden="true">📍</span>
+                          <h3 className="owner-branch-name">{b.name}</h3>
+                        </div>
+                        <div className="branch-badges-group">
+                          {b.isMain ? (
+                            <span className="badge-main-branch">★ Main Branch</span>
+                          ) : (
+                            <span className="badge-secondary-branch">Secondary Branch</span>
+                          )}
+                          <span className={`badge-active-status ${b.isActive !== false ? 'active' : 'inactive'}`}>
+                            {b.isActive !== false ? 'Active' : 'Inactive'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="owner-branch-row-details">
+                        <div className="owner-branch-detail-item address-item">
+                          <span className="detail-label">Address:</span>
+                          <span className="detail-value">{b.address || 'Address not specified'}</span>
+                        </div>
+
+                        <div className="owner-branch-detail-item phone-item">
+                          <span className="detail-label">Phone:</span>
+                          <span className="detail-value">
+                            {b.phone && b.phone.trim() ? (
+                              `📞 ${b.phone.trim()}`
                             ) : (
-                              <span className="badge-secondary-branch">Secondary Branch</span>
+                              <span className="muted" style={{ fontStyle: 'italic' }}>Not provided</span>
                             )}
-                            <span className={`badge-active-status ${b.isActive !== false ? 'active' : 'inactive'}`}>
-                              {b.isActive !== false ? 'Active' : 'Inactive'}
-                            </span>
-                          </div>
+                          </span>
                         </div>
 
-                        <div className="profile-branch-grid">
-                          <div className="info-field">
-                            <span className="info-label">Full Saved Address</span>
-                            <span className="info-value address-text">
-                              {b.address || 'Address not specified'}
-                            </span>
-                          </div>
-
-                          <div className="info-field">
-                            <span className="info-label">Contact Number</span>
-                            <span className="info-value contact-value">
-                              <span className="field-icon" aria-hidden="true">📞</span>
-                              {b.phone && b.phone.trim() ? (
-                                b.phone.trim()
-                              ) : (
-                                <span className="muted" style={{ fontStyle: 'italic' }}>Not provided</span>
-                              )}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="info-field">
-                          <span className="info-label">Saved Coordinates &amp; Map Location</span>
-                          <div className="map-integration-box">
+                        <div className="owner-branch-detail-item map-item">
+                          <span className="detail-label">Location:</span>
+                          <div className="detail-value map-wrap">
                             {coords ? (
                               <>
-                                <span className="coordinates-tag">
-                                  📍 Lat: {coords.lat.toFixed(6)}, Lng: {coords.lng.toFixed(6)}
+                                <span className="coords-text">
+                                  {coords.lat.toFixed(5)}, {coords.lng.toFixed(5)}
                                 </span>
                                 <a
-                                  className="map-link-btn"
+                                  className="owner-map-link"
                                   href={`https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lng}`}
                                   target="_blank"
                                   rel="noreferrer"
@@ -3550,21 +4024,19 @@ export default function Dashboard({ auth, socket, onLogout }) {
                                 </a>
                               </>
                             ) : (
-                              <span className="muted" style={{ fontStyle: 'italic' }}>
-                                Coordinates not available
-                              </span>
+                              <span className="muted" style={{ fontStyle: 'italic' }}>Coordinates not available</span>
                             )}
                           </div>
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </section>
-        </div>
-      </>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
     ) : (
       <div className="staff-unified-profile-wrap">
         <div className="staff-unified-profile-card">
@@ -3599,40 +4071,40 @@ export default function Dashboard({ auth, socket, onLogout }) {
               </div>
             </div>
 
-            <div className="staff-info-fields-grid">
-              <div className="info-field">
-                <span className="info-label">Pharmacy Name</span>
-                <span className="info-value name-highlight">
+            <div className="profile-rows-container">
+              <div className="profile-field-row">
+                <span className="profile-field-label">Pharmacy Name:</span>
+                <span className="profile-field-value name-highlight">
                   {profile?.pharmacy?.name || profile?.name || '—'}
                 </span>
               </div>
 
-              <div className="info-field">
-                <span className="info-label">Owner / Pharmacist Name</span>
-                <span className="info-value">
+              <div className="profile-field-row">
+                <span className="profile-field-label">Owner Name:</span>
+                <span className="profile-field-value">
                   {profile?.pharmacy?.ownerName || profile?.ownerName || 'Not specified'}
                 </span>
               </div>
 
-              <div className="info-field">
-                <span className="info-label">Owner Email</span>
-                <span className="info-value contact-value">
+              <div className="profile-field-row">
+                <span className="profile-field-label">Owner Email:</span>
+                <span className="profile-field-value contact-value">
                   <span className="field-icon" aria-hidden="true">✉️</span>
                   {profile?.pharmacy?.email || profile?.email || '—'}
                 </span>
               </div>
 
-              <div className="info-field">
-                <span className="info-label">Contact Number</span>
-                <span className="info-value contact-value">
+              <div className="profile-field-row">
+                <span className="profile-field-label">Contact Phone:</span>
+                <span className="profile-field-value contact-value">
                   <span className="field-icon" aria-hidden="true">📞</span>
                   {profile?.pharmacy?.phone || profile?.phone || 'Not provided'}
                 </span>
               </div>
 
-              <div className="info-field full-width">
-                <span className="info-label">Headquarters Address</span>
-                <span className="info-value address-text">
+              <div className="profile-field-row align-top">
+                <span className="profile-field-label">Headquarters Address:</span>
+                <span className="profile-field-value address-text">
                   {profile?.pharmacy?.address || '—'}
                 </span>
               </div>
@@ -3651,45 +4123,49 @@ export default function Dashboard({ auth, socket, onLogout }) {
               </div>
             </div>
 
-            <div className="staff-info-fields-grid">
-              <div className="info-field">
-                <span className="info-label">Staff Full Name</span>
-                <span className="info-value">
+            <div className="profile-rows-container">
+              <div className="profile-field-row">
+                <span className="profile-field-label">Staff Name:</span>
+                <span className="profile-field-value">
                   <strong>{profile?.staff?.name || auth.name}</strong>
                 </span>
               </div>
 
-              <div className="info-field">
-                <span className="info-label">Staff Email</span>
-                <span className="info-value contact-value">
+              <div className="profile-field-row">
+                <span className="profile-field-label">Staff Email:</span>
+                <span className="profile-field-value contact-value">
                   <span className="field-icon" aria-hidden="true">✉️</span>
                   {profile?.staff?.email || auth.email}
                 </span>
               </div>
 
-              <div className="info-field">
-                <span className="info-label">Account Role</span>
-                <span className="role-tag">Branch Staff Member</span>
-              </div>
-
-              <div className="info-field">
-                <span className="info-label">Account Status</span>
-                <span className="status-live-tag">
-                  <span className="status-dot-active" aria-hidden="true"></span>
-                  Active &amp; Verified
+              <div className="profile-field-row">
+                <span className="profile-field-label">Account Role:</span>
+                <span className="profile-field-value">
+                  <span className="role-tag">Branch Staff Member</span>
                 </span>
               </div>
 
-              <div className="info-field">
-                <span className="info-label">Assigned Branch</span>
-                <span className="info-value">
+              <div className="profile-field-row">
+                <span className="profile-field-label">Account Status:</span>
+                <span className="profile-field-value">
+                  <span className="status-live-tag">
+                    <span className="status-dot-active" aria-hidden="true"></span>
+                    Active &amp; Verified
+                  </span>
+                </span>
+              </div>
+
+              <div className="profile-field-row">
+                <span className="profile-field-label">Assigned Branch:</span>
+                <span className="profile-field-value">
                   {profile?.branch?.name || auth.branch?.name || '—'}
                 </span>
               </div>
 
-              <div className="info-field">
-                <span className="info-label">Registration Date</span>
-                <span className="info-value">
+              <div className="profile-field-row">
+                <span className="profile-field-label">Account Created:</span>
+                <span className="profile-field-value">
                   {profile?.staff?.createdAt
                     ? new Date(profile.staff.createdAt).toLocaleDateString('en-US', {
                         day: 'numeric',
@@ -3714,58 +4190,60 @@ export default function Dashboard({ auth, socket, onLogout }) {
               </div>
             </div>
 
-            <div className="staff-info-fields-grid">
-              <div className="info-field">
-                <span className="info-label">Branch Name</span>
-                <span className="info-value name-highlight">
+            <div className="profile-rows-container">
+              <div className="profile-field-row">
+                <span className="profile-field-label">Branch Name:</span>
+                <span className="profile-field-value name-highlight">
                   {profile?.branch?.name || auth.branch?.name || '—'}
                 </span>
               </div>
 
-              <div className="info-field">
-                <span className="info-label">Branch Type</span>
-                <span className="info-value">
+              <div className="profile-field-row">
+                <span className="profile-field-label">Branch Type:</span>
+                <span className="profile-field-value">
                   {(profile?.branch?.isMain ?? auth.branch?.isMain) ? '★ Main Branch' : 'Secondary Branch'}
                 </span>
               </div>
 
-              <div className="info-field">
-                <span className="info-label">Operating Status</span>
-                <span className="info-value">
+              <div className="profile-field-row">
+                <span className="profile-field-label">Operating Status:</span>
+                <span className="profile-field-value">
                   <span className="badge-active-status active">Active &amp; Open</span>
                 </span>
               </div>
 
-              <div className="info-field">
-                <span className="info-label">Branch Phone</span>
-                <span className="info-value contact-value">
+              <div className="profile-field-row">
+                <span className="profile-field-label">Branch Phone:</span>
+                <span className="profile-field-value contact-value">
                   <span className="field-icon" aria-hidden="true">📞</span>
                   {profile?.branch?.phone || 'Not provided'}
                 </span>
               </div>
 
-              <div className="info-field full-width">
-                <span className="info-label">Branch Address</span>
-                <span className="info-value address-text">
+              <div className="profile-field-row align-top">
+                <span className="profile-field-label">Branch Address:</span>
+                <span className="profile-field-value address-text">
                   {profile?.branch?.address || auth.branch?.address || '—'}
                 </span>
               </div>
 
               {profile?.branch?.location && parseCoordinates(profile.branch.location) && (
-                <div className="info-field full-width">
-                  <span className="info-label">Location Mapping</span>
-                  <div className="map-integration-box">
-                    <span className="coordinates-tag">
-                      📍 {parseCoordinates(profile.branch.location).lat.toFixed(6)}° N, {parseCoordinates(profile.branch.location).lng.toFixed(6)}° E
-                    </span>
-                    <a
-                      className="map-link-btn"
-                      href={`https://www.google.com/maps/dir/?api=1&destination=${parseCoordinates(profile.branch.location).lat},${parseCoordinates(profile.branch.location).lng}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open in Google Maps ↗
-                    </a>
+                <div className="profile-field-row align-top">
+                  <span className="profile-field-label">Location Mapping:</span>
+                  <div className="profile-field-value">
+                    <div className="map-integration-box">
+                      <span className="coordinates-tag">
+                        📍 {parseCoordinates(profile.branch.location).lat.toFixed(6)}° N, {parseCoordinates(profile.branch.location).lng.toFixed(6)}° E
+                      </span>
+                      <a
+                        className="map-link-btn"
+                        href={`https://www.google.com/maps/dir/?api=1&destination=${parseCoordinates(profile.branch.location).lat},${parseCoordinates(profile.branch.location).lng}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open in Google Maps ↗
+                      </a>
+                    </div>
                   </div>
                 </div>
               )}
