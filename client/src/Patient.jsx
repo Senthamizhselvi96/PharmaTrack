@@ -4,6 +4,7 @@ import PatientGoogleLocationPicker, {
   GooglePlacesAddressInput,
   isGoogleMapsConfigured
 } from './PatientGoogleLocationPicker.jsx';
+import PatientDashboardMap from './PatientDashboardMap.jsx';
 import {
   geocodeAddressUnified,
   reverseGeocodeUnified
@@ -222,6 +223,8 @@ export default function Patient({ auth, socket, onLogout }) {
         } catch {
           // Address couldn't be resolved yet
         }
+      } else if (!data?.address?.trim() && !currentPosRef.current) {
+        selectCurrentLocation();
       }
     } catch (e) {
       setMsg(e.message);
@@ -795,22 +798,9 @@ export default function Patient({ auth, socket, onLogout }) {
           <div className="patient-dashboard-grid">
             {/* LEFT COLUMN (35%): Medicine Search Results */}
             <div className="patient-col-results results-block">
-              {!hasSearched && !searching && (
-                <div className="patient-initial-search-state">
-                  <div className="initial-state-icon" aria-hidden="true">
-                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="11" cy="11" r="8" />
-                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                    </svg>
-                  </div>
-                  <div className="initial-state-text">
-                    <h3 className="initial-state-title">Search for a medicine</h3>
-                    <p className="initial-state-subtitle">
-                      Enter a medicine brand or generic name above to check availability and reserve for pickup.
-                    </p>
-                  </div>
-                </div>
-              )}
+              <div className="results-panel-header">
+                <h2 className="results-panel-heading">Available Medicines</h2>
+              </div>
 
               {searching && (
                 <div className="loading-state-box">
@@ -836,13 +826,6 @@ export default function Patient({ auth, socket, onLogout }) {
 
               {!searching && hasSearched && results.length > 0 && (
                 <div className="patient-results-container">
-                  <div className="results-header-bar">
-                    <h3 className="results-count-title">
-                      {results.length} {results.length === 1 ? 'pharmacy' : 'pharmacies'} found nearby
-                    </h3>
-                    <span className="results-radius-tag">Within 10 km</span>
-                  </div>
-
                   <div className="pharmacy-results-list">
                     {results.map(r => (
                       <article className="result-card" key={r.stock._id}>
@@ -864,16 +847,10 @@ export default function Patient({ auth, socket, onLogout }) {
 
                         <div className="result-pricing-strip">
                           <div className="price-item">
-                            <span className="price-label">Price per tablet</span>
+                            <span className="price-label">Price per tablet:</span>
                             <span className="price-value">
                               ₹{r.stock.price ?? '—'}
                               <span className="price-unit">/tablet</span>
-                            </span>
-                          </div>
-                          <div className="stock-status-info">
-                            <span className="stock-sublabel">Stock Status</span>
-                            <span className={`stock-subval ${r.stock.quantity === 0 ? 'text-out' : 'text-available'}`}>
-                              {r.stock.quantity === 0 ? 'Unavailable' : `${r.stock.quantity} in stock`}
                             </span>
                           </div>
                         </div>
@@ -976,6 +953,14 @@ export default function Patient({ auth, socket, onLogout }) {
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* RIGHT COLUMN (65%): Google Map */}
+            <div className="patient-col-map map-block">
+              <PatientDashboardMap
+                userLocation={pos}
+                results={results}
+              />
             </div>
           </div>
         </main>

@@ -24,7 +24,7 @@
 @media(max-width:850px){.role-grid,.two-panels,.stats{grid-template-columns:1fr 1fr}.patient-layout{grid-template-columns:1fr;height:auto}.map-panel{height:420px;order:-1}.dashboard-head{align-items:flex-start;flex-direction:column}.stats{grid-template-columns:1fr 1fr}}
 @media(max-width:560px){.topbar {
   height: 84px;
-  padding: 0 5%;
+  padding: 0 5% 0 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -316,7 +316,7 @@
 /* Responsive patient navigation */
 @media (max-width: 850px) {
   .patient-topbar {
-    padding: 10px 3%;
+    padding: 10px 3% 10px 20px;
     gap: 10px;
     flex-wrap: wrap;
   }
@@ -546,72 +546,41 @@
   box-shadow: 0 0 0 2px rgba(180, 35, 24, 0.2);
 }
 
-/* Pricing & Stock Status Strip */
+/* Pricing Strip (Compact & Clean) */
 .result-pricing-strip {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   background: #f7faf8;
   border: 1px solid #e1ece7;
-  border-radius: 10px;
-  padding: 9px 14px;
-  gap: 12px;
+  border-radius: 9px;
+  padding: 8px 14px;
 }
 
 .price-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .price-label {
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 0.82rem;
+  font-weight: 600;
   color: var(--muted);
 }
 
 .price-value {
-  font-size: 1.15rem;
+  font-size: 1.05rem;
   font-weight: 800;
   color: var(--pine2);
   line-height: 1.2;
 }
 
 .price-unit {
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   font-weight: 500;
   color: var(--muted);
-  margin-left: 2px;
-}
-
-.stock-status-info {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-}
-
-.stock-sublabel {
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-}
-
-.stock-subval {
-  font-size: 0.86rem;
-  font-weight: 700;
-}
-
-.stock-subval.text-available {
-  color: #0b5e4c;
-}
-
-.stock-subval.text-out {
-  color: #b42318;
+  margin-left: 1px;
 }
 
 /* Pharmacy Details Card */
@@ -1772,7 +1741,7 @@
 /* Responsive adjustments */
 @media (max-width: 850px) {
   .pharmacy-topbar {
-    padding: 10px 3%;
+    padding: 10px 3% 10px 20px;
     gap: 10px;
   }
 }
@@ -5984,42 +5953,114 @@
   min-width: 0;
 }
 
-.patient-initial-search-state {
-  background: var(--white);
-  border: 1.5px dashed #c8dbd5;
-  border-radius: 16px;
-  padding: 28px 20px;
+/* Clean Heading: Available Medicines */
+.results-panel-header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  text-align: left;
-  box-shadow: 0 2px 10px rgba(20, 48, 43, 0.02);
+  padding: 4px 2px 2px;
 }
 
-.initial-state-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: #e8f7f2;
-  color: var(--pine);
+.results-panel-heading {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 750;
+  letter-spacing: -0.015em;
+  color: var(--pine2);
+}
+
+/* Map Fallback Banner & Notifications */
+.map-fallback-banner {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  z-index: 1000;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  border-radius: 10px;
+  padding: 8px 14px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 10px;
+  font-size: 0.85rem;
+  color: #334155;
+  pointer-events: auto;
+}
+
+.map-banner-icon {
+  font-size: 1.05rem;
   flex-shrink: 0;
 }
 
-.initial-state-title {
-  margin: 0 0 4px;
-  font-size: 1.02rem;
-  font-weight: 750;
-  color: var(--ink);
+.map-banner-text {
+  font-weight: 500;
+  line-height: 1.35;
 }
 
-.initial-state-subtitle {
-  margin: 0;
-  font-size: 0.86rem;
-  color: var(--muted);
-  line-height: 1.45;
+/* Map Popup Card Styles */
+.map-popup-card {
+  padding: 2px 0;
+  font-family: inherit;
+  color: #1e293b;
+  min-width: 170px;
+}
+
+.map-popup-badge-user {
+  display: inline-block;
+  background: #0d9488;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.map-popup-badge-pharmacy {
+  display: inline-block;
+  background: #e11d48;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.map-popup-directions-btn {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 5px 10px;
+  background: #0f766e;
+  color: #ffffff !important;
+  text-decoration: none;
+  font-size: 0.8rem;
+  font-weight: 650;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+.map-popup-directions-btn:hover {
+  background: #0d5f59;
+}
+
+.map-loading-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.map-loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--pine);
 }
 
 .results-header-bar {
@@ -6133,7 +6174,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 4%;
+  padding: 0 4% 0 20px !important;
   gap: 20px;
 }
 
@@ -6176,7 +6217,7 @@
   object-fit: contain !important;
   object-position: left center !important;
   flex-shrink: 0 !important;
-  transform: translateY(8px) !important;
+  transform: translate(-10px, 8px) !important;
 }
 
 .brand-logo {
