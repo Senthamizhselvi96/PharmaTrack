@@ -771,9 +771,10 @@ const extractCoordinates = body => {
   return undefined;
 };
 
-// ---------- Pharmacy Branch Management (Owner only) ----------
-app.get('/api/pharmacy/branches', auth(['pharmacy']), wrap(async (req, res) => {
-  const branches = await getOwnerBranches(req.userId);
+// ---------- Pharmacy Branch Management ----------
+app.get('/api/pharmacy/branches', auth(['pharmacy', 'staff']), wrap(async (req, res) => {
+  const pharmacyId = req.role === 'staff' ? req.pharmacyId : req.userId;
+  const branches = await getOwnerBranches(pharmacyId);
   res.json(branches);
 }));
 
@@ -903,14 +904,14 @@ app.get('/api/pharmacy/transfers/available-stock', auth(['pharmacy', 'staff']), 
 
 // 2. Create Transfer Request
 app.post('/api/pharmacy/transfers', auth(['pharmacy', 'staff']), wrap(async (req, res) => {
-  const { fromBranch, toBranch, medicine, requestedQuantity } = req.body;
+  const { fromBranch, toBranch, medicine, requestedQuantity, quantity } = req.body;
 
   if (!medicine || !String(medicine).trim()) {
     throw httpError(400, 'Medicine name is required');
   }
   const cleanMed = String(medicine).trim();
 
-  const qty = Number(requestedQuantity);
+  const qty = Number(requestedQuantity !== undefined ? requestedQuantity : quantity);
   if (!Number.isInteger(qty) || qty < 1) {
     throw httpError(400, 'Requested quantity must be a positive integer');
   }
@@ -921,7 +922,11 @@ app.post('/api/pharmacy/transfers', auth(['pharmacy', 'staff']), wrap(async (req
 
   let destBranchId;
   if (req.role === 'staff') {
-    destBranchId = req.branchId;
+    if (String(fromBranch) === String(req.branchId) && toBranch && mongoose.Types.ObjectId.isValid(toBranch)) {
+      destBranchId = toBranch;
+    } else {
+      destBranchId = req.branchId;
+    }
   } else {
     if (!toBranch || !mongoose.Types.ObjectId.isValid(toBranch)) {
       throw httpError(400, 'Valid destination branch ID is required');
@@ -983,12 +988,120 @@ app.post('/api/pharmacy/transfers', auth(['pharmacy', 'staff']), wrap(async (req
     };
   }
 
+  // Direct Transfer support (e.g. initiated directly from Medicine Inventory)
+  if (req.body.directTransfer === true) {
+    const updatedFromStock = await Stock.findOneAndUpdate(
+      { _id: stock._id, quantity: { $gte: qty } },
+      { $inc: { quantity: -qty } },
+      { new: true }
+    );
+    if (!updatedFromStock) {
+      throw httpError(400, `Insufficient stock (${stock.quantity}) at supplying branch to transfer ${qty} units`);
+    }
+
+    const rx = new RegExp(`^${cleanMed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    let destStock = await Stock.findOne({ branch: destinationBranch._id, medicine: rx });
+    if (destStock) {
+      destStock = await Stock.findByIdAndUpdate(
+        destStock._id,
+        { $inc: { quantity: qty } },
+        { new: true }
+      );
+    } else {
+      destStock = await Stock.create({
+        pharmacy: req.pharmacyId,
+        branch: destinationBranch._id,
+        medicine: stock.medicine,
+        generic: stock.generic || '',
+        price: stock.price || 0,
+        quantity: qty
+      });
+    }
+
+    const transfer = await TransferRequest.create({
+      pharmacy: req.pharmacyId,
+      fromBranch: supplyingBranch._id,
+      toBranch: destinationBranch._id,
+      medicine: stock.medicine,
+      requestedQuantity: qty,
+      dispatchedQuantity: qty,
+      status: 'received',
+      requestedBy,
+      reviewedBy: {
+        userId: req.userId,
+        role: req.role,
+        name: requestedBy.name,
+        reviewedAt: new Date()
+      },
+      dispatchedBy: {
+        userId: req.userId,
+        role: req.role,
+        name: requestedBy.name,
+        dispatchedAt: new Date()
+      },
+      receivedBy: {
+        userId: req.userId,
+        role: req.role,
+        name: requestedBy.name,
+        receivedAt: new Date()
+      }
+    });
+
+    const populatedTransfer = await TransferRequest.findById(transfer._id)
+      .populate('fromBranch', 'name address phone isMain')
+      .populate('toBranch', 'name address phone isMain');
+
+    // Real-time Socket.IO inventory & transfer events
+    emitInventory(updatedFromStock);
+    emitInventory(destStock);
+    io.to(`pharmacy:${req.pharmacyId}`).emit('transfer:new', populatedTransfer);
+    io.to(`pharmacy:${req.pharmacyId}`).emit('transfer:updated', populatedTransfer);
+    io.to(`branch:${supplyingBranch._id}`).emit('transfer:updated', populatedTransfer);
+    io.to(`branch:${destinationBranch._id}`).emit('transfer:updated', populatedTransfer);
+
+    const actor = await resolveActorInfo(req);
+    await logActivity({
+      pharmacyId: req.pharmacyId,
+      branchId: destinationBranch._id,
+      actor,
+      actionType: 'transfer_received',
+      targetEntityType: 'TransferRequest',
+      targetEntityId: transfer._id,
+      description: `Transfer of ${qty} unit(s) of "${stock.medicine}" completed from ${supplyingBranch.name} to ${destinationBranch.name} by ${actor.displayName} (${actor.actorType})`,
+      details: {
+        medicine: stock.medicine,
+        requestedQuantity: qty,
+        dispatchedQuantity: qty,
+        quantity: qty,
+        supplyingBranch: supplyingBranch._id,
+        receivingBranch: destinationBranch._id,
+        supplyingBranchName: supplyingBranch.name,
+        receivingBranchName: destinationBranch.name,
+        status: 'received',
+        after: { status: 'received', requestedQuantity: qty, dispatchedQuantity: qty }
+      }
+    });
+
+    const transferObj = populatedTransfer.toObject ? populatedTransfer.toObject() : populatedTransfer;
+    transferObj.result = {
+      medicineName: stock.medicine,
+      quantity: qty,
+      sourceBranch: supplyingBranch.name,
+      destinationBranch: destinationBranch.name,
+      status: 'Completed (Received)'
+    };
+    transferObj.success = true;
+
+    return res.status(201).json(transferObj);
+  }
+
   const transfer = await TransferRequest.create({
     pharmacy: req.pharmacyId,
     fromBranch: supplyingBranch._id,
     toBranch: destinationBranch._id,
     medicine: stock.medicine,
     requestedQuantity: qty,
+    notes: req.body.notes ? String(req.body.notes).trim() : undefined,
     status: 'pending',
     requestedBy
   });
@@ -1112,54 +1225,232 @@ const executeTransferAction = async (req, transferId, action, extra = {}) => {
       throw httpError(403, 'Only supplying branch staff or pharmacy owner can approve this transfer');
     }
 
-    // Verify supplying branch still has stock
     const rx = new RegExp(`^${transfer.medicine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
-    const stock = await Stock.findOne({
-      branch: transfer.fromBranch,
-      medicine: rx
-    });
-    if (!stock || stock.quantity < transfer.requestedQuantity) {
-      throw httpError(400, `Insufficient stock (${stock ? stock.quantity : 0}) at supplying branch to approve transfer of ${transfer.requestedQuantity} units`);
-    }
+    const qty = transfer.requestedQuantity;
 
-    const updated = await TransferRequest.findOneAndUpdate(
-      { _id: transfer._id, status: 'pending' },
-      {
-        status: 'approved',
-        reviewedBy: {
-          userId: req.userId,
-          role: req.role,
-          name: actorName,
-          reviewedAt: new Date()
+    if (supportsTransactions) {
+      const session = await mongoose.startSession();
+      try {
+        session.startTransaction();
+
+        // 1. Lock and update TransferRequest status atomically from pending -> completed
+        const updatedTransfer = await TransferRequest.findOneAndUpdate(
+          { _id: transfer._id, status: 'pending' },
+          {
+            status: 'completed',
+            reviewedBy: {
+              userId: req.userId,
+              role: req.role,
+              name: actorName,
+              reviewedAt: new Date()
+            },
+            dispatchedQuantity: qty,
+            dispatchedBy: {
+              userId: req.userId,
+              role: req.role,
+              name: actorName,
+              dispatchedAt: new Date()
+            },
+            receivedBy: {
+              userId: req.userId,
+              role: req.role,
+              name: actorName,
+              receivedAt: new Date()
+            }
+          },
+          { session, new: true }
+        );
+        if (!updatedTransfer) {
+          throw httpError(409, 'Transfer request was already processed or status changed');
         }
-      },
-      { new: true }
-    );
-    if (!updated) {
-      throw httpError(409, 'Transfer status was modified by another operation');
-    }
 
-    await logActivity({
-      pharmacyId: transfer.pharmacy,
-      branchId: transfer.fromBranch,
-      actor,
-      actionType: 'transfer_approved',
-      targetEntityType: 'TransferRequest',
-      targetEntityId: transfer._id,
-      description: `Transfer of ${transfer.requestedQuantity} unit(s) of "${transfer.medicine}" approved by ${actor.displayName} (${actor.actorType})`,
-      details: {
-        medicine: transfer.medicine,
-        requestedQuantity: transfer.requestedQuantity,
-        quantity: transfer.requestedQuantity,
-        supplyingBranch: transfer.fromBranch,
-        receivingBranch: transfer.toBranch,
-        supplyingBranchName,
-        receivingBranchName,
-        status: 'approved',
-        before: { status: 'pending' },
-        after: { status: 'approved' }
+        // 2. Decrement supplying branch stock atomically
+        const sourceStock = await Stock.findOneAndUpdate(
+          {
+            branch: transfer.fromBranch,
+            medicine: rx,
+            quantity: { $gte: qty }
+          },
+          { $inc: { quantity: -qty } },
+          { session, new: true }
+        );
+        if (!sourceStock) {
+          throw httpError(400, `Insufficient stock at supplying branch to fulfill transfer of ${qty} units`);
+        }
+
+        // 3. Increment or create receiving branch stock
+        let destStock = await Stock.findOne({ branch: transfer.toBranch, medicine: rx }).session(session);
+        if (destStock) {
+          destStock = await Stock.findOneAndUpdate(
+            { _id: destStock._id },
+            { $inc: { quantity: qty } },
+            { session, new: true }
+          );
+        } else {
+          const created = await Stock.create([
+            {
+              pharmacy: transfer.pharmacy,
+              branch: transfer.toBranch,
+              medicine: transfer.medicine,
+              generic: sourceStock?.generic || '',
+              price: sourceStock?.price || 0,
+              quantity: qty
+            }
+          ], { session });
+          destStock = created[0];
+        }
+
+        await logActivity({
+          pharmacyId: transfer.pharmacy,
+          branchId: transfer.fromBranch,
+          actor,
+          actionType: 'transfer_approved',
+          targetEntityType: 'TransferRequest',
+          targetEntityId: transfer._id,
+          description: `Transfer of ${qty} unit(s) of "${transfer.medicine}" approved and fulfilled from ${supplyingBranchName} to ${receivingBranchName} by ${actor.displayName} (${actor.actorType})`,
+          details: {
+            medicine: transfer.medicine,
+            requestedQuantity: qty,
+            quantity: qty,
+            supplyingBranch: transfer.fromBranch,
+            receivingBranch: transfer.toBranch,
+            supplyingBranchName,
+            receivingBranchName,
+            status: 'completed',
+            before: { status: 'pending' },
+            after: { status: 'completed' }
+          },
+          session
+        });
+
+        await session.commitTransaction();
+        emitInventory(sourceStock);
+        emitInventory(destStock);
+      } catch (err) {
+        await session.abortTransaction().catch(() => {});
+        throw err;
+      } finally {
+        await session.endSession().catch(() => {});
       }
-    });
+    } else {
+      // Standalone execution: Atomic CAS update on transfer status, then atomic stock movement with rollback guard
+      const lockedTransfer = await TransferRequest.findOneAndUpdate(
+        { _id: transfer._id, status: 'pending' },
+        {
+          status: 'completed',
+          reviewedBy: {
+            userId: req.userId,
+            role: req.role,
+            name: actorName,
+            reviewedAt: new Date()
+          },
+          dispatchedQuantity: qty,
+          dispatchedBy: {
+            userId: req.userId,
+            role: req.role,
+            name: actorName,
+            dispatchedAt: new Date()
+          },
+          receivedBy: {
+            userId: req.userId,
+            role: req.role,
+            name: actorName,
+            receivedAt: new Date()
+          }
+        },
+        { new: true }
+      );
+      if (!lockedTransfer) {
+        throw httpError(409, 'Transfer request was already processed or status changed');
+      }
+
+      // Decrement source stock atomically
+      const sourceStock = await Stock.findOneAndUpdate(
+        {
+          branch: transfer.fromBranch,
+          medicine: rx,
+          quantity: { $gte: qty }
+        },
+        { $inc: { quantity: -qty } },
+        { new: true }
+      );
+
+      if (!sourceStock) {
+        // Rollback transfer status back to 'pending'
+        await TransferRequest.findByIdAndUpdate(transfer._id, {
+          status: 'pending',
+          $unset: { reviewedBy: 1, dispatchedBy: 1, receivedBy: 1, dispatchedQuantity: 1 }
+        });
+        const curr = await Stock.findOne({ branch: transfer.fromBranch, medicine: rx });
+        throw httpError(400, `Insufficient stock (${curr ? curr.quantity : 0}) at supplying branch to approve transfer of ${qty} units`);
+      }
+
+      // Increment destination stock
+      try {
+        let destStock = await Stock.findOne({ branch: transfer.toBranch, medicine: rx });
+        if (destStock) {
+          destStock = await Stock.findOneAndUpdate(
+            { _id: destStock._id },
+            { $inc: { quantity: qty } },
+            { new: true }
+          );
+        } else {
+          try {
+            destStock = await Stock.create({
+              pharmacy: transfer.pharmacy,
+              branch: transfer.toBranch,
+              medicine: transfer.medicine,
+              generic: sourceStock?.generic || '',
+              price: sourceStock?.price || 0,
+              quantity: qty
+            });
+          } catch (createErr) {
+            if (createErr.code === 11000) {
+              destStock = await Stock.findOneAndUpdate(
+                { branch: transfer.toBranch, medicine: rx },
+                { $inc: { quantity: qty } },
+                { new: true }
+              );
+            } else {
+              throw createErr;
+            }
+          }
+        }
+
+        await logActivity({
+          pharmacyId: transfer.pharmacy,
+          branchId: transfer.fromBranch,
+          actor,
+          actionType: 'transfer_approved',
+          targetEntityType: 'TransferRequest',
+          targetEntityId: transfer._id,
+          description: `Transfer of ${qty} unit(s) of "${transfer.medicine}" approved and fulfilled from ${supplyingBranchName} to ${receivingBranchName} by ${actor.displayName} (${actor.actorType})`,
+          details: {
+            medicine: transfer.medicine,
+            requestedQuantity: qty,
+            quantity: qty,
+            supplyingBranch: transfer.fromBranch,
+            receivingBranch: transfer.toBranch,
+            supplyingBranchName,
+            receivingBranchName,
+            status: 'completed',
+            before: { status: 'pending' },
+            after: { status: 'completed' }
+          }
+        });
+
+        emitInventory(sourceStock);
+        emitInventory(destStock);
+      } catch (destErr) {
+        // Rollback source stock decrement and transfer status
+        await Stock.findOneAndUpdate({ _id: sourceStock._id }, { $inc: { quantity: qty } });
+        await TransferRequest.findByIdAndUpdate(transfer._id, {
+          status: 'pending',
+          $unset: { reviewedBy: 1, dispatchedBy: 1, receivedBy: 1, dispatchedQuantity: 1 }
+        });
+        throw destErr;
+      }
+    }
   } else if (cleanAction === 'reject') {
     if (transfer.status !== 'pending') {
       throw httpError(400, `Cannot reject transfer in '${transfer.status}' status`);

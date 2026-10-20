@@ -116,10 +116,11 @@ const transferRequestSchema = new Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'approved', 'rejected', 'dispatched', 'received', 'cancelled'],
+    enum: ['pending', 'approved', 'rejected', 'dispatched', 'received', 'completed', 'cancelled'],
     default: 'pending',
     index: true
   },
+  notes: { type: String, trim: true },
   requestedBy: {
     userId: { type: Schema.Types.ObjectId, required: true },
     role: { type: String, enum: ['pharmacy', 'staff'], required: true },

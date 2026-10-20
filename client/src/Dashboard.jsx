@@ -79,6 +79,11 @@ const formatActivityTime = (dateString) => {
   });
 };
 
+const cleanTechnicalId = (text) => {
+  if (!text) return '';
+  return text.replace(/[0-9a-fA-F]{24}/g, '').replace(/\s+/g, ' ').trim();
+};
+
 export default function Dashboard({ auth, socket, onLogout }) {
   const isOwner = auth.role === 'pharmacy';
   const isStaff = auth.role === 'staff';
@@ -158,6 +163,16 @@ export default function Dashboard({ auth, socket, onLogout }) {
   const [transferRequestQty, setTransferRequestQty] = useState('');
   const [submittingTransfer, setSubmittingTransfer] = useState(false);
   const [submitTransferErr, setSubmitTransferErr] = useState('');
+
+  // Direct initiated stock transfer state
+  const [sendMedicineId, setSendMedicineId] = useState('');
+  const [selectedTransferStockItem, setSelectedTransferStockItem] = useState(null);
+  const [requestNote, setRequestNote] = useState('');
+  const [directTransferDestBranchId, setDirectTransferDestBranchId] = useState('');
+  const [directTransferQty, setDirectTransferQty] = useState('');
+  const [directTransferSubmitting, setDirectTransferSubmitting] = useState(false);
+  const [directTransferErr, setDirectTransferErr] = useState('');
+  const [lastTransferResult, setLastTransferResult] = useState(null);
 
   // Task 9: Action & Modal state
   const [confirmModal, setConfirmModal] = useState(null); // { transfer, action: 'dispatch' | 'receive' | 'reject' | 'cancel' }
@@ -286,6 +301,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
       // Status filter
       if (transferStatusFilter === 'all') return true;
+      if (transferStatusFilter === 'completed') return t.status === 'completed' || t.status === 'received';
       if (transferStatusFilter === 'closed') return ['rejected', 'cancelled'].includes(t.status);
       return t.status === transferStatusFilter;
     });
@@ -556,14 +572,24 @@ export default function Dashboard({ auth, socket, onLogout }) {
           fromBranch: selectedTransferCandidate.branch._id,
           toBranch: destId,
           medicine: selectedTransferCandidate.medicine,
-          requestedQuantity: qty
+          requestedQuantity: qty,
+          notes: requestNote ? requestNote.trim() : undefined
         }
       });
 
-      setTransferSuccess(`Transfer request for ${qty} units of "${res.medicine}" created with status "pending".`);
+      setTransferSuccess(`Transfer request for ${qty} unit(s) of "${res.medicine}" created with status "Pending".`);
       setSelectedTransferCandidate(null);
       setTransferRequestQty('');
+      setRequestNote('');
       setTransferSubView('history');
+
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('transferMode');
+        url.searchParams.delete('medicineId');
+        window.history.pushState({ view: 'transfers' }, '', url.pathname + (url.searchParams.toString() ? '?' + url.searchParams.toString() : ''));
+      } catch {}
+
       await loadTransfers();
       await loadAvailableStock(searchTransferQuery);
       setTimeout(() => setTransferSuccess(''), 5000);
@@ -593,7 +619,6 @@ export default function Dashboard({ auth, socket, onLogout }) {
   };
 
   const loadBranches = async () => {
-    if (!isOwner) return [];
     try {
       setLoadingBranches(true);
       setBranchListErr('');
@@ -622,10 +647,210 @@ export default function Dashboard({ auth, socket, onLogout }) {
       return branchList;
     } catch (e) {
       setBranchListErr(e.message);
-      await load();
+      if (isOwner) {
+        await load();
+      }
       return [];
     } finally {
       setLoadingBranches(false);
+    }
+  };
+
+  const handleInitiateTransfer = async (stockItem) => {
+    if (!stockItem) return;
+    if (stockItem.quantity <= 0) {
+      alert(`"${stockItem.medicine}" currently has 0 available units to transfer.`);
+      return;
+    }
+
+    setSelectedTransferStockItem(stockItem);
+    setSendMedicineId(stockItem._id);
+    setDirectTransferDestBranchId('');
+    setDirectTransferQty(1);
+    setDirectTransferErr('');
+    setLastTransferResult(null);
+
+    // Update URL query parameters for traceability / navigation state
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('view', 'transfers');
+      url.searchParams.set('transferMode', 'send');
+      url.searchParams.set('medicineId', stockItem._id);
+      window.history.pushState({ view: 'transfers', transferMode: 'send', medicineId: stockItem._id }, '', url.toString());
+    } catch {}
+
+    // Switch view to stock transfers send view
+    setView('transfers');
+    setTransferSubView('send');
+
+    // Ensure branches list is loaded so destination branch can be chosen
+    if (branches.length === 0) {
+      await loadBranches();
+    }
+  };
+
+  const handleOpenSendStock = async () => {
+    setSelectedTransferStockItem(null);
+    setSendMedicineId(''); // NEVER automatically select a default medicine!
+    setDirectTransferDestBranchId('');
+    setDirectTransferQty('');
+    setDirectTransferErr('');
+    setLastTransferResult(null);
+
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('view', 'transfers');
+      url.searchParams.set('transferMode', 'send');
+      url.searchParams.delete('medicineId');
+      window.history.pushState({ view: 'transfers', transferMode: 'send' }, '', url.toString());
+    } catch {}
+
+    setTransferSubView('send');
+    if (branches.length === 0) {
+      await loadBranches();
+    }
+  };
+
+  const handleOpenRequestStock = () => {
+    setSelectedTransferCandidate(null);
+    setTransferRequestQty('');
+    setRequestNote('');
+    setSubmitTransferErr('');
+
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('view', 'transfers');
+      url.searchParams.set('transferMode', 'request');
+      url.searchParams.delete('medicineId');
+      window.history.pushState({ view: 'transfers', transferMode: 'request' }, '', url.toString());
+    } catch {}
+
+    setTransferSubView('request');
+    loadAvailableStock('');
+  };
+
+  const handleBackToTransferDashboard = () => {
+    setSelectedTransferStockItem(null);
+    setSendMedicineId('');
+    setSelectedTransferCandidate(null);
+    setDirectTransferDestBranchId('');
+    setDirectTransferQty('');
+    setDirectTransferErr('');
+    setSubmitTransferErr('');
+    setTransferRequestQty('');
+    setRequestNote('');
+
+    // Clean up URL query parameters completely
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('medicineId');
+      url.searchParams.delete('sourceBranchId');
+      url.searchParams.delete('transferMode');
+      const cleanUrl = url.pathname + (url.searchParams.toString() ? '?' + url.searchParams.toString() : '');
+      window.history.pushState({ view: 'transfers' }, '', cleanUrl);
+    } catch {}
+
+    setTransferSubView('history');
+  };
+
+  const handleConfirmDirectTransfer = async (e) => {
+    if (e) e.preventDefault();
+    if (directTransferSubmitting) return;
+
+    setDirectTransferErr('');
+
+    const selectedStock = stock.find(s => s._id === sendMedicineId);
+    if (!selectedStock) {
+      setDirectTransferErr('Please select a valid medicine to transfer.');
+      return;
+    }
+
+    if (selectedStock.quantity <= 0) {
+      setDirectTransferErr(`"${selectedStock.medicine}" has no available stock to transfer.`);
+      return;
+    }
+
+    const srcBranchId =
+      selectedStock.branch?._id ||
+      selectedStock.branch ||
+      activeBranch?._id ||
+      (auth.branch ? (auth.branch.id || auth.branch._id) : '') ||
+      selectedBranchId;
+
+    const srcBranchObj =
+      branches.find(b => b._id === srcBranchId) ||
+      (typeof selectedStock.branch === 'object' && selectedStock.branch?.name ? selectedStock.branch : null) ||
+      activeBranch ||
+      auth.branch ||
+      null;
+
+    const srcBranchName = srcBranchObj?.name || 'Current Branch';
+
+    const destBranchId = directTransferDestBranchId;
+    if (!destBranchId) {
+      setDirectTransferErr('Please select a destination branch.');
+      return;
+    }
+
+    if (String(destBranchId) === String(srcBranchId)) {
+      setDirectTransferErr('Destination branch cannot be the same as the source branch.');
+      return;
+    }
+
+    const qty = parseInt(directTransferQty, 10);
+    if (!qty || isNaN(qty) || qty <= 0) {
+      setDirectTransferErr('Transfer quantity must be at least 1.');
+      return;
+    }
+
+    if (qty > selectedStock.quantity) {
+      setDirectTransferErr(`Transfer quantity cannot exceed available stock (${selectedStock.quantity} units).`);
+      return;
+    }
+
+    const destBranchObj = branches.find(b => b._id === destBranchId);
+    const destBranchName = destBranchObj?.name || 'Destination Branch';
+
+    try {
+      setDirectTransferSubmitting(true);
+      const res = await api('/pharmacy/transfers', {
+        method: 'POST',
+        token,
+        body: {
+          medicine: selectedStock.medicine,
+          stockId: selectedStock._id,
+          fromBranch: srcBranchId,
+          toBranch: destBranchId,
+          quantity: qty,
+          requestedQuantity: qty,
+          directTransfer: true
+        }
+      });
+
+      // Format result card data
+      const resultData = {
+        medicineName: res.result?.medicineName || selectedStock.medicine,
+        quantity: res.result?.quantity || qty,
+        sourceBranch: res.result?.sourceBranch || srcBranchName,
+        destinationBranch: res.result?.destinationBranch || destBranchName,
+        status: res.result?.status || 'Completed (Received)'
+      };
+
+      setLastTransferResult(resultData);
+      setTransferSuccess(`Successfully transferred ${qty} unit(s) of "${resultData.medicineName}" from ${resultData.sourceBranch} to ${resultData.destinationBranch}.`);
+
+      // Clear send form and return to history
+      handleBackToTransferDashboard();
+
+      // Refresh inventory and transfer logs
+      await Promise.all([
+        load(selectedBranchId),
+        loadTransfers(selectedBranchId)
+      ]);
+    } catch (err) {
+      setDirectTransferErr(err.message || 'Failed to complete stock transfer.');
+    } finally {
+      setDirectTransferSubmitting(false);
     }
   };
 
@@ -769,10 +994,58 @@ export default function Dashboard({ auth, socket, onLogout }) {
       loadBranches();
       loadProfile();
     } else {
+      loadBranches();
       load();
       loadProfile();
     }
   }, []);
+
+  useEffect(() => {
+    const handleUrlSync = () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const viewParam = params.get('view');
+        const modeParam = params.get('transferMode');
+        const medIdParam = params.get('medicineId');
+
+        if (viewParam === 'transfers') {
+          if (modeParam === 'send') {
+            setTransferSubView('send');
+            if (medIdParam) {
+              setSendMedicineId(medIdParam);
+              if (stock.length > 0) {
+                const matchStock = stock.find(s => String(s._id) === String(medIdParam));
+                if (matchStock) {
+                  if (matchStock.quantity > 0) {
+                    setDirectTransferErr('');
+                  } else {
+                    setDirectTransferErr(`"${matchStock.medicine}" has no available stock to transfer.`);
+                  }
+                } else if (!loading) {
+                  setDirectTransferErr('The selected medicine is not available or does not exist in this branch inventory.');
+                }
+              }
+            } else {
+              // Opening Send Stock directly — NO medicine selected by default!
+              setSendMedicineId('');
+              setSelectedTransferStockItem(null);
+            }
+          } else if (modeParam === 'request') {
+            setTransferSubView('request');
+            setSendMedicineId('');
+          } else {
+            // Main transfer dashboard — NO direct medicine selected
+            setTransferSubView('history');
+            setSendMedicineId('');
+          }
+        }
+      } catch {}
+    };
+
+    handleUrlSync();
+    window.addEventListener('popstate', handleUrlSync);
+    return () => window.removeEventListener('popstate', handleUrlSync);
+  }, [stock]);
 
   useEffect(() => {
     if (view === 'profile') {
@@ -793,6 +1066,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
   useEffect(() => {
     if (view === 'transfers') {
+      if (branches.length === 0) loadBranches();
       loadTransfers(selectedBranchId);
       loadAvailableStock();
     }
@@ -1567,6 +1841,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                     type="button"
                     className={view === 'transfers' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
                     onClick={() => {
+                      handleBackToTransferDashboard();
                       setView('transfers');
                       setTransferSubView('history');
                       loadTransfers();
@@ -1640,6 +1915,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                 type="button"
                 className={view === 'transfers' ? 'pharmacy-nav-link active' : 'pharmacy-nav-link'}
                 onClick={() => {
+                  handleBackToTransferDashboard();
                   setView('transfers');
                   setTransferSubView('history');
                   loadTransfers();
@@ -1968,7 +2244,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                         <line x1="12" y1="5" x2="12" y2="19"></line>
                         <line x1="5" y1="12" x2="19" y2="12"></line>
                       </svg>
-                      <span>+ Add Medicine</span>
+                      <span>Add Medicine</span>
                     </button>
                   </div>
 
@@ -2128,6 +2404,15 @@ export default function Dashboard({ auth, socket, onLogout }) {
                                       onClick={() => handleOpenEditMedicine(s)}
                                     >
                                       Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn-transfer-stock"
+                                      onClick={() => handleInitiateTransfer(s)}
+                                      disabled={s.quantity <= 0}
+                                      title={s.quantity <= 0 ? 'No stock available to transfer' : `Transfer ${s.medicine} to another branch`}
+                                    >
+                                      Transfer
                                     </button>
                                     <button
                                       type="button"
@@ -2515,27 +2800,85 @@ export default function Dashboard({ auth, socket, onLogout }) {
                 <strong>{pendingTransfersCount}</strong> pending / {transfers.length} total
               </span>
               {transferSubView === 'history' && (
-                <button
-                  type="button"
-                  className="btn-new-transfer"
-                  onClick={() => {
-                    setTransferSubView('request');
-                    setSelectedTransferCandidate(null);
-                    setSubmitTransferErr('');
-                    loadAvailableStock(searchTransferQuery);
-                  }}
-                >
-                  <svg className="btn-add-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                    <line x1="5" y1="12" x2="19" y2="12"></line>
-                  </svg>
-                  <span>New Transfer</span>
-                </button>
+                <div className="transfer-header-action-group" style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    type="button"
+                    className="btn-send-stock-main"
+                    onClick={handleOpenSendStock}
+                    title="Send medicine from the current branch to another authorized branch"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                    <span>Send Stock</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-request-stock-main"
+                    onClick={handleOpenRequestStock}
+                    title="Request a medicine from another branch"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="7 10 12 15 17 10"></polyline>
+                      <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    <span>Request Stock</span>
+                  </button>
+                </div>
               )}
             </div>
           </div>
 
           <main className="content-wrap transfer-view">
+            {lastTransferResult && (
+              <div className="transfer-result-card" role="region" aria-label="Transfer Confirmation">
+                <div className="transfer-result-header">
+                  <div className="transfer-result-title-group">
+                    <span className="transfer-result-icon">✓</span>
+                    <div>
+                      <h3 className="transfer-result-title">Stock Transfer Completed</h3>
+                      <p className="transfer-result-subtitle">Inventory updated and transfer logged successfully</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="transfer-result-close-btn"
+                    onClick={() => setLastTransferResult(null)}
+                    title="Dismiss result"
+                    aria-label="Close transfer result"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="transfer-result-grid">
+                  <div className="transfer-result-item">
+                    <span className="transfer-result-label">Medicine Name</span>
+                    <span className="transfer-result-value med-val">{lastTransferResult.medicineName}</span>
+                  </div>
+                  <div className="transfer-result-item">
+                    <span className="transfer-result-label">Quantity Transferred</span>
+                    <span className="transfer-result-value qty-val">{lastTransferResult.quantity} units</span>
+                  </div>
+                  <div className="transfer-result-item">
+                    <span className="transfer-result-label">Source Branch</span>
+                    <span className="transfer-result-value">{lastTransferResult.sourceBranch}</span>
+                  </div>
+                  <div className="transfer-result-item">
+                    <span className="transfer-result-label">Destination Branch</span>
+                    <span className="transfer-result-value">{lastTransferResult.destinationBranch}</span>
+                  </div>
+                  <div className="transfer-result-item transfer-result-item-full">
+                    <span className="transfer-result-label">Transfer Status</span>
+                    <span className="transfer-status-badge badge-received">
+                      ● {lastTransferResult.status}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {transferSuccess && (
               <div className="success-box" role="status">
                 <span>✓</span>
@@ -2544,188 +2887,422 @@ export default function Dashboard({ auth, socket, onLogout }) {
             )}
             {transferErr && <p className="note">{transferErr}</p>}
 
-            {transferSubView === 'request' ? (
+            {transferSubView === 'send' ? (
               <>
                 <div className="transfer-view-top-bar">
                   <button
                     type="button"
                     className="btn-back-to-transfers"
-                    onClick={() => {
-                      setTransferSubView('history');
-                      setSelectedTransferCandidate(null);
-                      setSubmitTransferErr('');
-                    }}
+                    onClick={handleBackToTransferDashboard}
                   >
                     ← Back to Transfers
                   </button>
                 </div>
 
-                {/* 1. Request Stock from Other Branch Panel */}
                 <section className="transfer-card-box">
-              <div className="panel-head">
-                <div>
-                  <p className="eyebrow">NEW TRANSFER REQUEST</p>
-                  <h2>Request Medicine from Another Branch</h2>
-                  <p className="muted">
-                    Search medicines available across other active branches of your pharmacy business
-                  </p>
-                </div>
-              </div>
+                  <div className="panel-head">
+                    <div>
+                      <p className="eyebrow">DIRECT STOCK TRANSFER</p>
+                      <h2>Send Medicine Stock</h2>
+                      <p className="muted">
+                        Send medicine stock from the current branch to another authorized branch
+                      </p>
+                    </div>
+                  </div>
 
-              {/* Medicine search across other branches */}
-              <div className="transfer-search-container">
-                <input
-                  type="search"
-                  className="transfer-search-input"
-                  placeholder="Search medicine or generic name in other branches..."
-                  value={searchTransferQuery}
-                  onChange={e => {
-                    const val = e.target.value;
-                    setSearchTransferQuery(val);
-                    loadAvailableStock(val);
-                  }}
-                  aria-label="Search available medicines across other branches"
-                />
-                <button
-                  type="button"
-                  className="btn-select-avail-med"
-                  onClick={() => loadAvailableStock(searchTransferQuery)}
-                  style={{ padding: '0 16px', fontSize: '0.9rem' }}
-                >
-                  Search
-                </button>
-              </div>
+                  {directTransferErr && (
+                    <div className="error-box" style={{ margin: '16px 0' }}>
+                      {directTransferErr}
+                    </div>
+                  )}
 
-              {loadingAvailableStock ? (
-                <div className="loading-state-box">
-                  <span className="loading-spinner" aria-hidden="true" />
-                  <span>Searching other branch inventories...</span>
-                </div>
-              ) : availableOtherStock.length === 0 ? (
-                <div className="empty" style={{ padding: '20px', marginBottom: '16px' }}>
-                  <p className="muted" style={{ margin: 0 }}>
-                    {searchTransferQuery
-                      ? `No medicines matching "${searchTransferQuery}" found in other active branches.`
-                      : 'No available medicines found in other branches. Add branches or update inventory first.'}
-                  </p>
-                </div>
-              ) : (
-                <div className="available-stock-grid">
-                  {availableOtherStock.map(item => {
-                    const isSelected = selectedTransferCandidate?.stockId === item.stockId;
-                    return (
-                      <div
-                        key={item.stockId}
-                        className={`available-stock-card ${isSelected ? 'selected' : ''}`}
-                        onClick={() => {
-                          setSelectedTransferCandidate(item);
-                          setTransferRequestQty(1);
-                          setSubmitTransferErr('');
+                  <form onSubmit={handleConfirmDirectTransfer} className="send-stock-form">
+                    <div className="send-stock-field-group">
+                      <label htmlFor="send-medicine-select" className="send-stock-label">
+                        Select Medicine to Transfer *
+                      </label>
+                      <select
+                        id="send-medicine-select"
+                        className="send-stock-select send-stock-select-primary"
+                        value={sendMedicineId}
+                        onChange={e => {
+                          const nextMedId = e.target.value;
+                          setSendMedicineId(nextMedId);
+                          setDirectTransferErr('');
+                          setDirectTransferQty(1);
+                          try {
+                            const url = new URL(window.location.href);
+                            if (nextMedId) {
+                              url.searchParams.set('medicineId', nextMedId);
+                            } else {
+                              url.searchParams.delete('medicineId');
+                            }
+                            window.history.pushState({ view: 'transfers', transferMode: 'send', medicineId: nextMedId }, '', url.toString());
+                          } catch {}
                         }}
+                        required
                       >
-                        <div className="available-stock-card-header">
-                          <div>
-                            <h4 className="avail-med-name">{item.medicine}</h4>
-                            <span className="avail-generic-name">{item.generic || '—'}</span>
-                          </div>
-                          <span className="avail-branch-badge">
-                            📍 {item.branch.name}
-                          </span>
-                        </div>
+                        <option value="">-- Select Medicine --</option>
+                        {stock.map(s => (
+                          <option key={s._id} value={s._id} disabled={s.quantity <= 0}>
+                            {s.medicine} {s.generic ? `(${s.generic})` : ''} — Available: {s.quantity} units {s.quantity <= 0 ? '(Out of Stock)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                      {stock.length === 0 && !loading && (
+                        <p className="send-stock-warning">
+                          No medicines available in this branch inventory to transfer.
+                        </p>
+                      )}
+                    </div>
 
-                        <div className="avail-stock-details">
-                          <span className="avail-qty-text">
-                            Available: <strong>{item.availableQuantity}</strong> units
-                          </span>
-                          {item.price != null && (
-                            <span className="muted">₹{item.price} / unit</span>
-                          )}
-                          <button
-                            type="button"
-                            className="btn-select-avail-med"
-                            onClick={(e) => {
-                              e.stopPropagation();
+                    {(() => {
+                      const selectedStock =
+                        stock.find(s => String(s._id) === String(sendMedicineId)) ||
+                        (selectedTransferStockItem && String(selectedTransferStockItem._id) === String(sendMedicineId)
+                          ? selectedTransferStockItem
+                          : null);
+
+                      if (loading && !selectedStock) {
+                        return (
+                          <div className="transfer-loading-inline" style={{ padding: '24px 0', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span className="loading-spinner" aria-hidden="true" />
+                            <span className="muted" style={{ fontSize: '0.9rem' }}>Loading medicine details…</span>
+                          </div>
+                        );
+                      }
+
+                      if (sendMedicineId && !selectedStock) {
+                        return (
+                          <div style={{ marginTop: '16px' }}>
+                            <div className="error-box">
+                              The selected medicine is not available or does not exist in this branch inventory.
+                            </div>
+                            <div className="send-stock-actions-bar" style={{ marginTop: '16px' }}>
+                              <button
+                                type="button"
+                                className="btn-modal-cancel"
+                                onClick={handleBackToTransferDashboard}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      if (!selectedStock) {
+                        return (
+                          <div className="send-stock-actions-bar">
+                            <button
+                              type="button"
+                              className="btn-modal-cancel"
+                              onClick={handleBackToTransferDashboard}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        );
+                      }
+
+                      const srcBranchId =
+                        selectedStock.branch?._id ||
+                        selectedStock.branch ||
+                        activeBranch?._id ||
+                        (auth.branch ? (auth.branch.id || auth.branch._id) : '') ||
+                        selectedBranchId;
+                      const availableDestBranches = branches.filter(b => b.isActive !== false && b._id !== srcBranchId);
+
+                      return (
+                        <>
+                          <div className="transfer-selected-medicine-banner">
+                            <div className="transfer-selected-med-info">
+                              <span className="transfer-selected-badge">Selected Medicine</span>
+                              <h3 className="transfer-selected-med-name">{selectedStock.medicine}</h3>
+                              {selectedStock.generic && (
+                                <p className="transfer-selected-generic-name">{selectedStock.generic}</p>
+                              )}
+                            </div>
+                            <div className="transfer-selected-meta-pills">
+                              <div className="transfer-meta-pill">
+                                <span className="meta-pill-label">Source Branch</span>
+                                <span className="meta-pill-val">📍 {activeBranch?.name || auth.branch?.name || 'Current Branch'}</span>
+                              </div>
+                              <div className="transfer-meta-pill">
+                                <span className="meta-pill-label">Available Stock</span>
+                                <span className="meta-pill-val qty-highlight"><strong>{selectedStock.quantity}</strong> units</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="send-stock-fields-row">
+                            <div className="send-stock-field-group">
+                              <label htmlFor="send-dest-branch" className="send-stock-label">
+                                Destination Branch *
+                              </label>
+                              <select
+                                id="send-dest-branch"
+                                className="send-stock-select"
+                                value={directTransferDestBranchId}
+                                onChange={e => {
+                                  setDirectTransferDestBranchId(e.target.value);
+                                  setDirectTransferErr('');
+                                }}
+                                required
+                              >
+                                <option value="">-- Select Destination Branch --</option>
+                                {availableDestBranches.map(b => (
+                                  <option key={b._id} value={b._id}>
+                                    {b.name} {b.address ? `(${b.address})` : ''} {b.isMain ? '★ Main Branch' : ''}
+                                  </option>
+                                ))}
+                              </select>
+                              {availableDestBranches.length === 0 && (
+                                <p className="send-stock-warning">
+                                  No other active branches available to receive transfers.
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="send-stock-field-group">
+                              <label htmlFor="send-transfer-qty" className="send-stock-label">
+                                Transfer Quantity (units) *
+                              </label>
+                              <input
+                                id="send-transfer-qty"
+                                type="number"
+                                className="send-stock-input"
+                                min="1"
+                                max={selectedStock.quantity}
+                                step="1"
+                                value={directTransferQty}
+                                onChange={e => {
+                                  setDirectTransferQty(e.target.value);
+                                  setDirectTransferErr('');
+                                }}
+                                placeholder={`1 - ${selectedStock.quantity}`}
+                                required
+                              />
+                              <span className="send-stock-hint">
+                                Max available: <strong>{selectedStock.quantity}</strong> units
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="send-stock-actions-bar">
+                            <button
+                              type="submit"
+                              className="btn-submit-transfer"
+                              disabled={
+                                directTransferSubmitting ||
+                                !directTransferDestBranchId ||
+                                !directTransferQty ||
+                                Number(directTransferQty) <= 0 ||
+                                Number(directTransferQty) > selectedStock.quantity
+                              }
+                            >
+                              {directTransferSubmitting ? 'Transferring Stock…' : 'Confirm Transfer'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-modal-cancel"
+                              onClick={handleBackToTransferDashboard}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </form>
+                </section>
+              </>
+            ) : transferSubView === 'request' ? (
+              <>
+                <div className="transfer-view-top-bar">
+                  <button
+                    type="button"
+                    className="btn-back-to-transfers"
+                    onClick={handleBackToTransferDashboard}
+                  >
+                    ← Back to Transfers
+                  </button>
+                </div>
+
+                <section className="transfer-card-box">
+                  <div className="panel-head">
+                    <div>
+                      <p className="eyebrow">NEW TRANSFER REQUEST</p>
+                      <h2>Request Medicine from Another Branch</h2>
+                      <p className="muted">
+                        Search medicines available across other active branches of your pharmacy business
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Medicine search across other branches */}
+                  <div className="transfer-search-container">
+                    <input
+                      type="search"
+                      className="transfer-search-input"
+                      placeholder="Search medicine or generic name in other branches..."
+                      value={searchTransferQuery}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setSearchTransferQuery(val);
+                        loadAvailableStock(val);
+                      }}
+                      aria-label="Search available medicines across other branches"
+                    />
+                    <button
+                      type="button"
+                      className="btn-select-avail-med"
+                      onClick={() => loadAvailableStock(searchTransferQuery)}
+                      style={{ padding: '0 16px', fontSize: '0.9rem' }}
+                    >
+                      Search
+                    </button>
+                  </div>
+
+                  {loadingAvailableStock ? (
+                    <div className="loading-state-box">
+                      <span className="loading-spinner" aria-hidden="true" />
+                      <span>Searching other branch inventories...</span>
+                    </div>
+                  ) : availableOtherStock.length === 0 ? (
+                    <div className="empty" style={{ padding: '20px', marginBottom: '16px' }}>
+                      <p className="muted" style={{ margin: 0 }}>
+                        {searchTransferQuery
+                          ? `No medicines matching "${searchTransferQuery}" found in other active branches.`
+                          : 'No available medicines found in other branches. Add branches or update inventory first.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="available-stock-grid">
+                      {availableOtherStock.map(item => {
+                        const isSelected = selectedTransferCandidate?.stockId === item.stockId;
+                        return (
+                          <div
+                            key={item.stockId}
+                            className={`available-stock-card ${isSelected ? 'selected' : ''}`}
+                            onClick={() => {
                               setSelectedTransferCandidate(item);
                               setTransferRequestQty(1);
                               setSubmitTransferErr('');
                             }}
                           >
-                            {isSelected ? 'Selected' : 'Select'}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                            <div className="available-stock-card-header">
+                              <div>
+                                <h4 className="avail-med-name">{item.medicine}</h4>
+                                <span className="avail-generic-name">{item.generic || '—'}</span>
+                              </div>
+                              <span className="avail-branch-badge">
+                                📍 {item.branch.name}
+                              </span>
+                            </div>
 
-              {/* Selected Candidate Transfer Order Form */}
-              {selectedTransferCandidate && (
-                <div className="transfer-form-card">
-                  <div className="transfer-meta-preview">
-                    <span>
-                      Supplying Branch: <strong>{selectedTransferCandidate.branch.name}</strong>
-                    </span>
-                    <span className="transfer-flow-arrow">→</span>
-                    <span>
-                      Destination: <strong>{activeBranch?.name || auth.branch?.name || 'Selected Branch'}</strong>
-                    </span>
-                    <span>
-                      Medicine: <strong style={{ color: 'var(--pine)' }}>{selectedTransferCandidate.medicine}</strong>
-                    </span>
-                    <span>
-                      Max Available: <strong>{selectedTransferCandidate.availableQuantity}</strong> units
-                    </span>
-                  </div>
-
-                  {submitTransferErr && (
-                    <div className="error-box" style={{ marginBottom: '14px' }}>
-                      {submitTransferErr}
+                            <div className="avail-stock-details">
+                              <span className="avail-qty-text">
+                                Available: <strong>{item.availableQuantity}</strong> units
+                              </span>
+                              {item.price != null && (
+                                <span className="muted">₹{item.price} / unit</span>
+                              )}
+                              <button
+                                type="button"
+                                className="btn-select-avail-med"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedTransferCandidate(item);
+                                  setTransferRequestQty(1);
+                                  setSubmitTransferErr('');
+                                }}
+                              >
+                                {isSelected ? 'Selected' : 'Select'}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
 
-                  <form onSubmit={handleSubmitTransfer} className="transfer-form-grid">
-                    <label>
-                      Requested Quantity (units)
-                      <input
-                        type="number"
-                        min="1"
-                        max={selectedTransferCandidate.availableQuantity}
-                        step="1"
-                        value={transferRequestQty}
-                        onChange={e => setTransferRequestQty(e.target.value)}
-                        placeholder={`1 - ${selectedTransferCandidate.availableQuantity}`}
-                        required
-                        style={{ marginTop: '4px' }}
-                      />
-                    </label>
+                  {/* Selected Candidate Transfer Order Form */}
+                  {selectedTransferCandidate && (
+                    <div className="transfer-form-card">
+                      <div className="transfer-meta-preview">
+                        <span>
+                          Supplying Branch: <strong>{selectedTransferCandidate.branch.name}</strong>
+                        </span>
+                        <span className="transfer-flow-arrow">→</span>
+                        <span>
+                          Destination: <strong>{activeBranch?.name || auth.branch?.name || 'Selected Branch'}</strong>
+                        </span>
+                        <span>
+                          Medicine: <strong style={{ color: 'var(--pine)' }}>{selectedTransferCandidate.medicine}</strong>
+                        </span>
+                        <span>
+                          Max Available: <strong>{selectedTransferCandidate.availableQuantity}</strong> units
+                        </span>
+                      </div>
 
-                    <div style={{ display: 'flex', gap: '10px' }}>
-                      <button
-                        type="submit"
-                        className="btn-submit-transfer"
-                        disabled={submittingTransfer}
-                        style={{ flex: 1 }}
-                      >
-                        {submittingTransfer ? 'Submitting…' : 'Submit Transfer Request'}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-modal-cancel"
-                        onClick={() => {
-                          setSelectedTransferCandidate(null);
-                          setTransferSubView('history');
-                        }}
-                      >
-                        Cancel
-                      </button>
+                      {submitTransferErr && (
+                        <div className="error-box" style={{ marginBottom: '14px' }}>
+                          {submitTransferErr}
+                        </div>
+                      )}
+
+                      <form onSubmit={handleSubmitTransfer} className="transfer-form-grid">
+                        <label>
+                          Requested Quantity (units) *
+                          <input
+                            type="number"
+                            min="1"
+                            max={selectedTransferCandidate.availableQuantity}
+                            step="1"
+                            value={transferRequestQty}
+                            onChange={e => setTransferRequestQty(e.target.value)}
+                            placeholder={`1 - ${selectedTransferCandidate.availableQuantity}`}
+                            required
+                            style={{ marginTop: '4px' }}
+                          />
+                        </label>
+
+                        <label>
+                          Request Note (Optional)
+                          <input
+                            type="text"
+                            value={requestNote}
+                            onChange={e => setRequestNote(e.target.value)}
+                            placeholder="e.g., Emergency stock needed, routine refill..."
+                            maxLength="200"
+                            style={{ marginTop: '4px' }}
+                          />
+                        </label>
+
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                          <button
+                            type="submit"
+                            className="btn-submit-transfer"
+                            disabled={submittingTransfer}
+                            style={{ flex: 1 }}
+                          >
+                            {submittingTransfer ? 'Submitting…' : 'Submit Transfer Request'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-modal-cancel"
+                            onClick={handleBackToTransferDashboard}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
                     </div>
-                  </form>
-                </div>
-              )}
-            </section>
-          </>
-        ) : (
+                  )}
+                </section>
+              </>
+            ) : (
           /* 2. Transfer Requests History Panel */
           <section className="transfer-card-box">
               <div className="panel-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '14px' }}>
@@ -2792,17 +3369,17 @@ export default function Dashboard({ auth, socket, onLogout }) {
                 </button>
                 <button
                   type="button"
-                  className={`tab ${transferStatusFilter === 'dispatched' ? 'active' : ''}`}
-                  onClick={() => setTransferStatusFilter('dispatched')}
+                  className={`tab ${transferStatusFilter === 'completed' ? 'active' : ''}`}
+                  onClick={() => setTransferStatusFilter('completed')}
                 >
-                  Dispatched ({transfers.filter(t => t.status === 'dispatched').length})
+                  Completed ({transfers.filter(t => t.status === 'completed' || t.status === 'received').length})
                 </button>
                 <button
                   type="button"
-                  className={`tab ${transferStatusFilter === 'received' ? 'active' : ''}`}
-                  onClick={() => setTransferStatusFilter('received')}
+                  className={`tab ${transferStatusFilter === 'rejected' ? 'active' : ''}`}
+                  onClick={() => setTransferStatusFilter('rejected')}
                 >
-                  Received ({transfers.filter(t => t.status === 'received').length})
+                  Rejected ({transfers.filter(t => t.status === 'rejected').length})
                 </button>
                 <button
                   type="button"
@@ -2837,15 +3414,15 @@ export default function Dashboard({ auth, socket, onLogout }) {
                   <table>
                     <thead>
                       <tr>
-                        <th>Medicine</th>
-                        <th>Qty</th>
-                        <th>Direction</th>
-                        <th>Supplying Branch</th>
-                        <th>Destination Branch</th>
-                        <th>Requested By</th>
-                        <th>Status</th>
-                        <th>Date & Time</th>
-                        <th>Actions</th>
+                        <th className="col-medicine">Medicine</th>
+                        <th className="col-qty">Qty</th>
+                        <th className="col-direction">Direction</th>
+                        <th className="col-branch">Supplying Branch</th>
+                        <th className="col-branch">Destination Branch</th>
+                        <th className="col-user">Requested By</th>
+                        <th className="col-status">Status</th>
+                        <th className="col-date">Date & Time</th>
+                        <th className="col-actions">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2855,13 +3432,15 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
                         return (
                           <tr key={t._id}>
-                            <td>
+                            <td className="col-medicine">
                               <strong className="med-name-primary">{t.medicine}</strong>
                             </td>
-                            <td>
-                              <strong>{t.dispatchedQuantity || t.requestedQuantity}</strong> units
+                            <td className="col-qty">
+                              <span className="transfer-qty-val">
+                                <strong>{t.dispatchedQuantity || t.requestedQuantity}</strong> units
+                              </span>
                             </td>
-                            <td>
+                            <td className="col-direction">
                               {incoming ? (
                                 <span className="direction-badge incoming">📥 Incoming</span>
                               ) : outgoing ? (
@@ -2870,27 +3449,36 @@ export default function Dashboard({ auth, socket, onLogout }) {
                                 <span className="muted" style={{ fontSize: '0.8rem' }}>—</span>
                               )}
                             </td>
-                            <td>
-                              <span>📍 {t.fromBranch?.name || '—'}</span>
-                              {t.fromBranch?.isMain && <small className="badge-main-branch" style={{ display: 'inline-block', marginLeft: '4px' }}>Main</small>}
+                            <td className="col-branch">
+                              <div className="transfer-branch-item">
+                                <span>📍 {t.fromBranch?.name || '—'}</span>
+                                {t.fromBranch?.isMain && <small className="badge-main-branch">Main</small>}
+                              </div>
                             </td>
-                            <td>
-                              <span>📍 {t.toBranch?.name || '—'}</span>
-                              {t.toBranch?.isMain && <small className="badge-main-branch" style={{ display: 'inline-block', marginLeft: '4px' }}>Main</small>}
+                            <td className="col-branch">
+                              <div className="transfer-branch-item">
+                                <span>📍 {t.toBranch?.name || '—'}</span>
+                                {t.toBranch?.isMain && <small className="badge-main-branch">Main</small>}
+                              </div>
                             </td>
-                            <td>
-                              <span>{t.requestedBy?.name || '—'}</span>
-                              <small>{t.requestedBy?.role === 'pharmacy' ? 'Owner' : 'Staff'}</small>
+                            <td className="col-user">
+                              <div className="transfer-user-item">
+                                <span className="transfer-user-name">{t.requestedBy?.name || '—'}</span>
+                                <small className="transfer-user-role">{t.requestedBy?.role === 'pharmacy' ? 'Owner' : 'Staff'}</small>
+                              </div>
                             </td>
-                            <td>
+                            <td className="col-status">
                               <span className={`status ${t.status}`}>
-                                {t.status}
+                                {t.status === 'completed' || t.status === 'received' ? 'Completed' : (t.status.charAt(0).toUpperCase() + t.status.slice(1))}
                               </span>
                             </td>
-                            <td>
-                              <span className="muted" style={{ fontSize: '0.82rem' }}>{new Date(t.createdAt).toLocaleString()}</span>
+                            <td className="col-date">
+                              <div className="transfer-date-cell">
+                                <span className="transfer-date-main">{new Date(t.createdAt).toLocaleDateString()}</span>
+                                <span className="transfer-time-sub">{new Date(t.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                              </div>
                             </td>
-                            <td>
+                            <td className="col-actions">
                               <div className="transfer-actions-cell">
                                 {canApprove(t) && (
                                   <button
@@ -2966,7 +3554,13 @@ export default function Dashboard({ auth, socket, onLogout }) {
                                   </button>
                                 )}
 
-                                {!canApprove(t) && !canReject(t) && !canDispatch(t) && !canReceive(t) && !canCancel(t) && (
+                                {(t.status === 'completed' || t.status === 'received') && (
+                                  <span className="fulfilled-badge">
+                                    ✓ Fulfilled
+                                  </span>
+                                )}
+
+                                {!canApprove(t) && !canReject(t) && !canDispatch(t) && !canReceive(t) && !canCancel(t) && t.status !== 'completed' && t.status !== 'received' && (
                                   <span className="muted" style={{ fontSize: '0.8rem' }}>None</span>
                                 )}
                               </div>
@@ -3663,6 +4257,15 @@ export default function Dashboard({ auth, socket, onLogout }) {
                         const formattedTime = formatActivityTime(log.createdAt);
                         const isExpanded = Boolean(expandedActivityIds[log._id]);
 
+                        const medName = details.medicine || (log.targetEntityType === 'Stock' ? details.after?.medicine || details.before?.medicine : null);
+                        const beforeQty = details.before?.quantity;
+                        const afterQty = details.after?.quantity;
+                        const qty = details.quantity !== undefined ? details.quantity : details.dispatchedQuantity;
+                        const supplying = details.supplyingBranchName || details.supplyingBranch?.name;
+                        const receiving = details.receivingBranchName || details.receivingBranch?.name;
+                        const patient = details.patientName;
+                        const branchName = activeBranch?.name || auth.branch?.name;
+
                         return (
                           <div key={log._id} className={`activity-audit-row ${isExpanded ? 'is-expanded' : ''}`}>
                             <div className="activity-row-main">
@@ -3674,57 +4277,76 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
                               {/* Row Content Body */}
                               <div className="activity-row-body">
-                                <div className="activity-row-desc">
-                                  <span className="activity-desc-text">{log.description}</span>
+                                <div className="activity-readable-summary">
+                                  {medName && (
+                                    <strong className="activity-med-title">{medName}</strong>
+                                  )}
+
+                                  {beforeQty !== undefined && afterQty !== undefined ? (
+                                    <span className="activity-detail-item">
+                                      {medName && <span className="activity-bullet">•</span>}
+                                      Quantity changed from <span className="diff-old">{beforeQty}</span> to <strong className="diff-new">{afterQty} units</strong>
+                                    </span>
+                                  ) : qty !== undefined ? (
+                                    <span className="activity-detail-item">
+                                      {medName && <span className="activity-bullet">•</span>}
+                                      <strong>{qty} units</strong> {
+                                        log.actionType === 'medicine_added' ? 'added' :
+                                        log.actionType === 'medicine_removed' ? 'removed' :
+                                        log.actionType === 'transfer_dispatched' ? 'dispatched' :
+                                        log.actionType === 'transfer_received' ? 'received' :
+                                        log.actionType === 'transfer_requested' ? 'requested' :
+                                        log.actionType === 'transfer_approved' ? 'approved' :
+                                        log.actionType?.startsWith('reservation_') ? 'reserved' : ''
+                                      }
+                                    </span>
+                                  ) : null}
+
+                                  {supplying && receiving ? (
+                                    <span className="activity-detail-item">
+                                      <span className="activity-bullet">•</span>
+                                      From <strong>{supplying}</strong> to <strong>{receiving}</strong>
+                                    </span>
+                                  ) : supplying && log.actionType === 'transfer_received' ? (
+                                    <span className="activity-detail-item">
+                                      <span className="activity-bullet">•</span>
+                                      Received from <strong>{supplying}</strong>
+                                    </span>
+                                  ) : receiving && log.actionType === 'transfer_dispatched' ? (
+                                    <span className="activity-detail-item">
+                                      <span className="activity-bullet">•</span>
+                                      Sent to <strong>{receiving}</strong>
+                                    </span>
+                                  ) : null}
+
+                                  {patient && (
+                                    <span className="activity-detail-item">
+                                      <span className="activity-bullet">•</span>
+                                      Patient: <strong>{patient}</strong>
+                                    </span>
+                                  )}
+
+                                  {!medName && !qty && (
+                                    <span className="activity-fallback-text">{cleanTechnicalId(log.description)}</span>
+                                  )}
                                 </div>
 
-                                {/* Contextual Chips Strip */}
-                                <div className="activity-chips-strip">
-                                  {details.medicine && (
-                                    <span className="audit-chip chip-medicine" title="Affected Medicine">
-                                      💊 {details.medicine}
-                                    </span>
-                                  )}
+                                {details.reason && (
+                                  <div className="activity-note-sub">
+                                    💬 Note: "{details.reason}"
+                                  </div>
+                                )}
 
-                                  {details.before?.quantity !== undefined && details.after?.quantity !== undefined && (
-                                    <span className="audit-chip chip-diff" title="Quantity Change">
-                                      📊 Stock: <strong className="diff-old">{details.before.quantity}</strong> → <strong className="diff-new">{details.after.quantity}</strong> units
-                                    </span>
-                                  )}
+                                {/* Performed By and Branch Info */}
+                                <div className="activity-meta-strip">
+                                  <span className={`actor-badge ${isOwnerActor ? 'actor-owner' : 'actor-staff'}`}>
+                                    {isOwnerActor ? '👑' : '👤'} {log.actor?.displayName || (isOwnerActor ? 'Owner' : 'Staff')}
+                                    <span className="actor-role-note">({isOwnerActor ? 'Owner' : 'Staff'})</span>
+                                  </span>
 
-                                  {details.before?.quantity === undefined && details.quantity !== undefined && (
-                                    <span className="audit-chip chip-qty" title="Quantity">
-                                      📦 Qty: <strong>{details.quantity}</strong> units
-                                    </span>
-                                  )}
-
-                                  {details.dispatchedQuantity !== undefined && (
-                                    <span className="audit-chip chip-qty" title="Dispatched Quantity">
-                                      🚚 Dispatched: <strong>{details.dispatchedQuantity}</strong> units
-                                    </span>
-                                  )}
-
-                                  {details.status && (
-                                    <span className="audit-chip chip-status" title="Status">
-                                      🏷️ Status: <strong>{details.status}</strong>
-                                    </span>
-                                  )}
-
-                                  {details.patientName && (
-                                    <span className="audit-chip chip-patient" title="Patient Name">
-                                      🧑‍🦱 Patient: <strong>{details.patientName}</strong>
-                                    </span>
-                                  )}
-
-                                  {details.supplyingBranch && details.receivingBranch && (
-                                    <span className="audit-chip chip-route" title="Transfer Route">
-                                      🔄 {details.supplyingBranchName || details.supplyingBranch?.name || 'Branch'} → {details.receivingBranchName || details.receivingBranch?.name || 'Branch'}
-                                    </span>
-                                  )}
-
-                                  {details.reason && (
-                                    <span className="audit-chip chip-reason" title="Reason">
-                                      💬 "{details.reason}"
+                                  {branchName && (
+                                    <span className="activity-branch-badge">
+                                      📍 {branchName}
                                     </span>
                                   )}
                                 </div>
@@ -3732,11 +4354,6 @@ export default function Dashboard({ auth, socket, onLogout }) {
 
                               {/* Actor, Timestamp & Expand Action */}
                               <div className="activity-row-meta">
-                                <span className={`actor-badge ${isOwnerActor ? 'actor-owner' : 'actor-staff'}`}>
-                                  {isOwnerActor ? '👑' : '👤'} {log.actor?.displayName || (isOwnerActor ? 'Owner' : 'Staff')}
-                                  <span className="actor-role-note">({isOwnerActor ? 'Owner' : 'Staff'})</span>
-                                </span>
-
                                 <time className="audit-time" dateTime={log.createdAt} title={new Date(log.createdAt).toISOString()}>
                                   🕒 {formattedTime}
                                 </time>
