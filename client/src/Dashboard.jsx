@@ -3,7 +3,25 @@ import { api } from './api.js';
 import PharmacyLocationPicker from './PharmacyLocationPicker.jsx';
 import { searchAddressWithFallback } from './geocoding.js';
 
-const blank = { medicine: '', generic: '', quantity: 0, price: '' };
+export const PRODUCT_CATEGORIES = [
+  'Medicines',
+  'Healthcare Devices',
+  'First Aid & Medical Supplies',
+  'Personal Care & Skincare',
+  'Baby & Mother Care',
+  'Nutrition & Wellness',
+  'Hygiene & Essentials'
+];
+
+const blank = {
+  category: 'Medicines',
+  medicine: '',
+  generic: '',
+  brand: '',
+  description: '',
+  quantity: 0,
+  price: ''
+};
 const LOW_STOCK_THRESHOLD = 10;
 
 const parseCoordinates = loc => {
@@ -27,12 +45,16 @@ const getActivityActionMeta = (actionType) => {
   switch (actionType) {
     case 'medicine_added':
       return { label: 'Medicine Added', badgeClass: 'act-badge-emerald', icon: '➕' };
+    case 'product_added':
+      return { label: 'Product Added', badgeClass: 'act-badge-emerald', icon: '🛍️' };
     case 'stock_increased':
       return { label: 'Stock Increased', badgeClass: 'act-badge-emerald', icon: '📈' };
     case 'stock_decreased':
       return { label: 'Stock Decreased', badgeClass: 'act-badge-amber', icon: '📉' };
     case 'medicine_updated':
       return { label: 'Medicine Updated', badgeClass: 'act-badge-blue', icon: '✏️' };
+    case 'product_updated':
+      return { label: 'Product Updated', badgeClass: 'act-badge-blue', icon: '✏️' };
     case 'medicine_removed':
       return { label: 'Medicine Deleted', badgeClass: 'act-badge-rose', icon: '🗑️' };
     case 'reservation_confirmed':
@@ -91,6 +113,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
   const [stock, setStock] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [stockFilter, setStockFilter] = useState('all');
+  const [categoryFilter, setCategoryFilter] = useState('all');
   const [inventorySubView, setInventorySubView] = useState('list'); // 'list' | 'form'
   const [inventorySuccessMsg, setInventorySuccessMsg] = useState('');
   const [profile, setProfile] = useState(null);
@@ -1175,11 +1198,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
           text: `✓ Exact address match found for "${topResult.shortName}". Map pin positioned at location. Click or drag to adjust.`
         });
       } else {
-        const unmatchedNote = topResult.unmatchedPart ? `Street or colony "${topResult.unmatchedPart}" was not found as a mapped entity on OpenStreetMap. ` : '';
-        setAddBranchGeocodeMsg({
-          type: 'approx',
-          text: `⚠️ Approximate locality match (${topResult.matchedQuery}). ${unmatchedNote}The pin has been placed at the locality center. Please click or drag the marker to your pharmacy's exact building location.`
-        });
+        setAddBranchGeocodeMsg({ type: '', text: '' });
       }
     } catch {
       setAddBranchGeocodeMsg({
@@ -1199,10 +1218,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
         text: `✓ Selected exact match: "${item.shortName}". Map pin updated.`
       });
     } else {
-      setAddBranchGeocodeMsg({
-        type: 'approx',
-        text: `⚠️ Selected approximate locality (${item.matchedQuery}). Please click or drag the marker to your pharmacy's exact building location.`
-      });
+      setAddBranchGeocodeMsg({ type: '', text: '' });
     }
     // Full user-entered address in addBranchForm.address remains completely preserved!
   };
@@ -1317,11 +1333,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
           text: `✓ Exact address match found for "${topResult.shortName}". Map pin positioned at location. Click or drag to adjust.`
         });
       } else {
-        const unmatchedNote = topResult.unmatchedPart ? `Street or colony "${topResult.unmatchedPart}" was not found as a mapped entity on OpenStreetMap. ` : '';
-        setEditBranchGeocodeMsg({
-          type: 'approx',
-          text: `⚠️ Approximate locality match (${topResult.matchedQuery}). ${unmatchedNote}The pin has been placed at the locality center. Please click or drag the marker to your pharmacy's exact building location.`
-        });
+        setEditBranchGeocodeMsg({ type: '', text: '' });
       }
     } catch {
       setEditBranchGeocodeMsg({
@@ -1341,10 +1353,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
         text: `✓ Selected exact match: "${item.shortName}". Map pin updated.`
       });
     } else {
-      setEditBranchGeocodeMsg({
-        type: 'approx',
-        text: `⚠️ Selected approximate locality (${item.matchedQuery}). Please click or drag the marker to your pharmacy's exact building location.`
-      });
+      setEditBranchGeocodeMsg({ type: '', text: '' });
     }
     // Full user-entered address in editBranchForm.address remains completely preserved!
   };
@@ -1688,8 +1697,11 @@ export default function Dashboard({ auth, socket, onLogout }) {
     return parseCoordinates(profile?.location);
   }, [editingAddress, selectedLocation, profile?.location]);
 
-  const handleOpenAddMedicine = () => {
-    setItem(blank);
+  const handleOpenAddMedicine = (initialCategory = 'Medicines') => {
+    setItem({
+      ...blank,
+      category: initialCategory
+    });
     setErr('');
     setInventorySuccessMsg('');
     setInventorySubView('form');
@@ -1698,6 +1710,10 @@ export default function Dashboard({ auth, socket, onLogout }) {
   const handleOpenEditMedicine = (s) => {
     setItem({
       ...s,
+      category: s.category || 'Medicines',
+      generic: s.generic || '',
+      brand: s.brand || '',
+      description: s.description || '',
       price: s.price ?? ''
     });
     setErr('');
@@ -1716,19 +1732,35 @@ export default function Dashboard({ auth, socket, onLogout }) {
     setBusy(true);
     setErr('');
     try {
-      const payload = { ...item };
+      const isMed = (item.category || 'Medicines') === 'Medicines';
+      const cleanName = (item.medicine || '').trim();
+      if (!cleanName) {
+        throw new Error(isMed ? 'Medicine name is required' : 'Product name is required');
+      }
+
+      const payload = {
+        ...item,
+        medicine: cleanName,
+        category: item.category || 'Medicines',
+        generic: isMed ? (item.generic || '').trim() : '',
+        brand: isMed ? '' : (item.brand || '').trim(),
+        description: isMed ? '' : (item.description || '').trim(),
+        quantity: Math.floor(Number(item.quantity) || 0),
+        price: item.price === '' || item.price == null ? undefined : Number(item.price)
+      };
+
       if (isOwner && selectedBranchId) {
         payload.branchId = selectedBranchId;
       }
       await api('/pharmacy/stock', { method: 'PUT', token, body: payload });
-      const savedMedName = item.medicine ? item.medicine.trim() : 'Medicine';
+      const savedName = cleanName || (isMed ? 'Medicine' : 'Product');
       const wasEditing = Boolean(item._id);
       setItem(blank);
       setInventorySubView('list');
       setInventorySuccessMsg(
         wasEditing
-          ? `Successfully updated "${savedMedName}".`
-          : `Successfully added "${savedMedName}" to inventory.`
+          ? `Successfully updated "${savedName}".`
+          : `Successfully added "${savedName}" to inventory.`
       );
       setTimeout(() => setInventorySuccessMsg(''), 5000);
       await load(selectedBranchId);
@@ -1764,9 +1796,17 @@ export default function Dashboard({ auth, socket, onLogout }) {
   const filteredStock = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return stock.filter(s => {
+      const itemCategory = s.category || 'Medicines';
+      if (categoryFilter !== 'all' && itemCategory !== categoryFilter) {
+        return false;
+      }
+
       const matchesSearch = !query ||
         (s.medicine && s.medicine.toLowerCase().includes(query)) ||
-        (s.generic && s.generic.toLowerCase().includes(query));
+        (s.generic && s.generic.toLowerCase().includes(query)) ||
+        (s.brand && s.brand.toLowerCase().includes(query)) ||
+        (s.description && s.description.toLowerCase().includes(query)) ||
+        itemCategory.toLowerCase().includes(query);
 
       if (!matchesSearch) return false;
 
@@ -1774,7 +1814,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
       if (stockFilter === 'all') return true;
       return status === stockFilter;
     });
-  }, [stock, searchQuery, stockFilter]);
+  }, [stock, searchQuery, stockFilter, categoryFilter]);
 
   const isOwnerBranchProfileContext = Boolean(
     isOwner && view === 'profile' && previousOwnerView !== 'branches' && activeBranch
@@ -2046,119 +2086,194 @@ export default function Dashboard({ auth, socket, onLogout }) {
                 </button>
               </div>
 
-              <section className="panel inventory-form-panel">
-                <div className="panel-head inventory-form-header">
-                  <div>
-                    <p className="eyebrow">{item._id ? 'INVENTORY MANAGEMENT' : 'NEW MEDICINE'}</p>
-                    <h2>{item._id ? 'Edit Medicine' : 'Add New Medicine'}</h2>
-                    <p className="inventory-form-subtext">
-                      {item._id
-                        ? `Update stock quantity, pricing, or details for "${item.medicine}".`
-                        : `Enter medicine details and current available stock quantity for ${activeBranch?.name || 'this branch'}.`}
-                    </p>
-                  </div>
-                  {item._id && (
-                    <span className="editing-medicine-pill">
-                      Editing: <strong>{item.medicine}</strong>
-                    </span>
-                  )}
-                </div>
-
-                {err && (
-                  <div className="inventory-form-error" role="alert">
-                    <span className="inventory-error-icon" aria-hidden="true">⚠</span>
-                    <span>{err}</span>
-                  </div>
-                )}
-
-                <form onSubmit={save} className="inventory-form-container">
-                  <div className="inventory-form-field">
-                    <label htmlFor="inv-med-name">
-                      Medicine Name <span className="req-star">*</span>
-                    </label>
-                    <input
-                      id="inv-med-name"
-                      type="text"
-                      value={item.medicine}
-                      onChange={e => setItem({ ...item, medicine: e.target.value })}
-                      placeholder="e.g. Paracetamol 500mg"
-                      required
-                      autoFocus
-                    />
-                    <span className="field-hint">Enter the full brand or trade name with dosage strength</span>
-                  </div>
-
-                  <div className="inventory-form-field">
-                    <label htmlFor="inv-med-generic">
-                      Generic / Chemical Name
-                    </label>
-                    <input
-                      id="inv-med-generic"
-                      type="text"
-                      value={item.generic}
-                      onChange={e => setItem({ ...item, generic: e.target.value })}
-                      placeholder="e.g. Paracetamol"
-                    />
-                    <span className="field-hint">Active chemical compound for patient searches</span>
-                  </div>
-
-                  <div className="inventory-form-two-col">
-                    <div className="inventory-form-field">
-                      <label htmlFor="inv-med-qty">
-                        Quantity in Stock <span className="req-star">*</span>
-                      </label>
-                      <input
-                        id="inv-med-qty"
-                        type="number"
-                        min="0"
-                        value={item.quantity}
-                        onChange={e => setItem({ ...item, quantity: Number(e.target.value) })}
-                        required
-                      />
-                      <span className="field-hint">Total available units/strips in stock</span>
+              {(() => {
+                const isMedicine = (item.category || 'Medicines') === 'Medicines';
+                return (
+                  <section className="panel inventory-form-panel">
+                    <div className="panel-head inventory-form-header">
+                      <div>
+                        <p className="eyebrow">{item._id ? 'INVENTORY MANAGEMENT' : isMedicine ? 'NEW MEDICINE' : 'NEW HEALTHCARE PRODUCT'}</p>
+                        <h2>{item._id ? (isMedicine ? 'Edit Medicine' : 'Edit Product') : (isMedicine ? 'Add New Medicine' : 'Add New Healthcare Product')}</h2>
+                        <p className="inventory-form-subtext">
+                          {item._id
+                            ? `Update stock quantity, pricing, or details for "${item.medicine}".`
+                            : isMedicine
+                            ? `Enter medicine details and current available stock quantity for ${activeBranch?.name || 'this branch'}.`
+                            : `Enter healthcare product details and current available stock quantity for ${activeBranch?.name || 'this branch'}.`}
+                        </p>
+                      </div>
+                      {item._id && (
+                        <span className="editing-medicine-pill">
+                          Editing: <strong>{item.medicine}</strong> ({item.category || 'Medicines'})
+                        </span>
+                      )}
                     </div>
 
-                    <div className="inventory-form-field">
-                      <label htmlFor="inv-med-price">
-                        Price per tablet / unit (₹)
-                      </label>
-                      <input
-                        id="inv-med-price"
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={item.price}
-                        onChange={e => setItem({ ...item, price: e.target.value })}
-                        placeholder="e.g. 2.00"
-                      />
-                      <span className="field-hint">Selling price in rupees per unit</span>
-                    </div>
-                  </div>
+                    {err && (
+                      <div className="inventory-form-error" role="alert">
+                        <span className="inventory-error-icon" aria-hidden="true">⚠</span>
+                        <span>{err}</span>
+                      </div>
+                    )}
 
-                  <div className="inventory-form-actions-bar">
-                    <button
-                      type="button"
-                      className="btn-inventory-cancel"
-                      onClick={handleCancelInventoryForm}
-                      disabled={busy}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="btn-inventory-submit"
-                      disabled={busy}
-                    >
-                      {busy ? 'Saving…' : item._id ? 'Update Medicine' : 'Add Medicine'}
-                    </button>
-                  </div>
-                </form>
-              </section>
+                    <form onSubmit={save} className="inventory-form-container">
+                      {/* Product Category Selector */}
+                      <div className="inventory-form-field">
+                        <label htmlFor="inv-category-select">
+                          Product Category <span className="req-star">*</span>
+                        </label>
+                        <select
+                          id="inv-category-select"
+                          className="inventory-category-select-input"
+                          value={item.category || 'Medicines'}
+                          onChange={e => setItem({ ...item, category: e.target.value })}
+                        >
+                          {PRODUCT_CATEGORIES.map(cat => (
+                            <option key={cat} value={cat}>{cat}</option>
+                          ))}
+                        </select>
+                        <span className="field-hint">Choose whether this is a prescription/OTC medicine or healthcare supply</span>
+                      </div>
+
+                      {isMedicine ? (
+                        <>
+                          <div className="inventory-form-field">
+                            <label htmlFor="inv-med-name">
+                              Medicine Name <span className="req-star">*</span>
+                            </label>
+                            <input
+                              id="inv-med-name"
+                              type="text"
+                              value={item.medicine}
+                              onChange={e => setItem({ ...item, medicine: e.target.value })}
+                              placeholder="e.g. Paracetamol 500mg"
+                              required
+                              autoFocus
+                            />
+                            <span className="field-hint">Enter the full brand or trade name with dosage strength</span>
+                          </div>
+
+                          <div className="inventory-form-field">
+                            <label htmlFor="inv-med-generic">
+                              Generic / Chemical Name
+                            </label>
+                            <input
+                              id="inv-med-generic"
+                              type="text"
+                              value={item.generic}
+                              onChange={e => setItem({ ...item, generic: e.target.value })}
+                              placeholder="e.g. Paracetamol"
+                            />
+                            <span className="field-hint">Active chemical compound for patient searches</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="inventory-form-field">
+                            <label htmlFor="inv-prod-name">
+                              Product Name <span className="req-star">*</span>
+                            </label>
+                            <input
+                              id="inv-prod-name"
+                              type="text"
+                              value={item.medicine}
+                              onChange={e => setItem({ ...item, medicine: e.target.value })}
+                              placeholder="e.g. Digital Blood Pressure Monitor, First Aid Kit, Sunscreen SPF 50..."
+                              required
+                              autoFocus
+                            />
+                            <span className="field-hint">Name of the device, skincare item, first aid supply, or wellness product</span>
+                          </div>
+
+                          <div className="inventory-form-field">
+                            <label htmlFor="inv-prod-brand">
+                              Brand / Manufacturer
+                            </label>
+                            <input
+                              id="inv-prod-brand"
+                              type="text"
+                              value={item.brand || ''}
+                              onChange={e => setItem({ ...item, brand: e.target.value })}
+                              placeholder="e.g. Omron, Dettol, Himalaya, Johnson & Johnson..."
+                            />
+                            <span className="field-hint">Manufacturer or brand name</span>
+                          </div>
+
+                          <div className="inventory-form-field">
+                            <label htmlFor="inv-prod-desc">
+                              Product Description (Optional)
+                            </label>
+                            <input
+                              id="inv-prod-desc"
+                              type="text"
+                              value={item.description || ''}
+                              onChange={e => setItem({ ...item, description: e.target.value })}
+                              placeholder="e.g. Automatic upper arm cuff, pack of 50, hypoallergenic, etc."
+                            />
+                            <span className="field-hint">Key specifications, pack size, or usage notes</span>
+                          </div>
+                        </>
+                      )}
+
+                      <div className="inventory-form-two-col">
+                        <div className="inventory-form-field">
+                          <label htmlFor="inv-med-qty">
+                            Quantity in Stock <span className="req-star">*</span>
+                          </label>
+                          <input
+                            id="inv-med-qty"
+                            type="number"
+                            min="0"
+                            value={item.quantity}
+                            onChange={e => setItem({ ...item, quantity: Number(e.target.value) })}
+                            required
+                          />
+                          <span className="field-hint">Total available units in stock</span>
+                        </div>
+
+                        <div className="inventory-form-field">
+                          <label htmlFor="inv-med-price">
+                            {isMedicine ? 'Price per tablet / unit (₹)' : 'Price per unit (₹)'}
+                          </label>
+                          <input
+                            id="inv-med-price"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.price}
+                            onChange={e => setItem({ ...item, price: e.target.value })}
+                            placeholder={isMedicine ? 'e.g. 2.00' : 'e.g. 25.00'}
+                          />
+                          <span className="field-hint">Selling price in rupees per unit</span>
+                        </div>
+                      </div>
+
+                      <div className="inventory-form-actions-bar">
+                        <button
+                          type="button"
+                          className="btn-inventory-cancel"
+                          onClick={handleCancelInventoryForm}
+                          disabled={busy}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          className="btn-inventory-submit"
+                          disabled={busy}
+                        >
+                          {busy ? 'Saving…' : item._id ? (isMedicine ? 'Update Medicine' : 'Update Product') : (isMedicine ? 'Add Medicine' : 'Add Product')}
+                        </button>
+                      </div>
+                    </form>
+                  </section>
+                );
+              })()}
             </main>
           ) : (
             <main className="content-wrap">
               <div className="stats">
-                <div><strong>{stock.length}</strong><span>Medicines</span></div>
+                <div><strong>{stock.length}</strong><span>Items in Stock</span></div>
                 <div><strong>{totalStock}</strong><span>Total units</span></div>
                 <div
                   className="stat-reservations"
@@ -2171,7 +2286,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                   <strong>{pending}</strong>
                   <span>Active reservations ↗</span>
                 </div>
-                <div><strong>{stock.filter(s => s.quantity > 0).length}</strong><span>In stock</span></div>
+                <div><strong>{stock.filter(s => s.quantity > 0).length}</strong><span>Available</span></div>
               </div>
 
               {inventorySuccessMsg && (
@@ -2197,18 +2312,18 @@ export default function Dashboard({ auth, socket, onLogout }) {
                 <div className="inventory-list-section">
                   <div className="inventory-list-header">
                     <div className="inventory-header-left">
-                      <h3 className="inventory-section-title">Medicine Inventory</h3>
+                      <h3 className="inventory-section-title">Pharmacy Inventory</h3>
                       <span className="inventory-matches-count">
                         {stock.length === 0
-                          ? '0 medicines'
+                          ? '0 items'
                           : filteredStock.length === stock.length
-                          ? `${stock.length} medicines total`
-                          : `${filteredStock.length} of ${stock.length} medicines matching`}
+                          ? `${stock.length} items total`
+                          : `${filteredStock.length} of ${stock.length} items matching`}
                       </span>
                     </div>
                   </div>
 
-                  <div className="medicine-actions-toolbar" role="toolbar" aria-label="Medicine actions toolbar">
+                  <div className="medicine-actions-toolbar" role="toolbar" aria-label="Inventory actions toolbar">
                     <div className="inventory-search-box">
                       <svg className="inventory-search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <circle cx="11" cy="11" r="8"></circle>
@@ -2217,10 +2332,10 @@ export default function Dashboard({ auth, socket, onLogout }) {
                       <input
                         type="search"
                         className="inventory-search-input"
-                        placeholder="Search by medicine or generic name..."
+                        placeholder="Search medicines, devices, personal care..."
                         value={searchQuery}
                         onChange={e => setSearchQuery(e.target.value)}
-                        aria-label="Search by medicine or generic name"
+                        aria-label="Search by product name, generic, or brand"
                       />
                       {searchQuery && (
                         <button
@@ -2235,16 +2350,37 @@ export default function Dashboard({ auth, socket, onLogout }) {
                       )}
                     </div>
 
+                    <div className="inventory-category-filter-wrap">
+                      <select
+                        id="inventory-category-filter"
+                        className="inventory-toolbar-category-select"
+                        value={categoryFilter}
+                        onChange={e => setCategoryFilter(e.target.value)}
+                        aria-label="Filter inventory by category"
+                        title="Filter inventory by product category"
+                      >
+                        <option value="all">All Categories ({stock.length})</option>
+                        {PRODUCT_CATEGORIES.map(cat => {
+                          const count = stock.filter(s => (s.category || 'Medicines') === cat).length;
+                          return (
+                            <option key={cat} value={cat}>
+                              {cat} ({count})
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
                     <button
                       type="button"
                       className="btn-add-medicine"
-                      onClick={handleOpenAddMedicine}
+                      onClick={() => handleOpenAddMedicine('Medicines')}
                     >
                       <svg className="btn-add-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <line x1="12" y1="5" x2="12" y2="19"></line>
                         <line x1="5" y1="12" x2="19" y2="12"></line>
                       </svg>
-                      <span>Add Medicine</span>
+                      <span>Add Medicine / Product</span>
                     </button>
                   </div>
 
@@ -2257,7 +2393,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                         className={stockFilter === 'all' ? 'filter-tab-btn active' : 'filter-tab-btn'}
                         onClick={() => setStockFilter('all')}
                       >
-                        All Medicines
+                        All Stock
                         <span className="filter-tab-count">{stock.length}</span>
                       </button>
 
@@ -2295,13 +2431,14 @@ export default function Dashboard({ auth, socket, onLogout }) {
                       </button>
                     </div>
 
-                    {(searchQuery || stockFilter !== 'all') && (
+                    {(searchQuery || stockFilter !== 'all' || categoryFilter !== 'all') && (
                       <button
                         type="button"
                         className="reset-filters-link"
                         onClick={() => {
                           setSearchQuery('');
                           setStockFilter('all');
+                          setCategoryFilter('all');
                         }}
                       >
                         Reset filters
@@ -2322,16 +2459,16 @@ export default function Dashboard({ auth, socket, onLogout }) {
                           <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
                         </svg>
                       </div>
-                      <h3 className="empty-state-title">No medicines in inventory</h3>
+                      <h3 className="empty-state-title">No items in inventory</h3>
                       <p className="empty-state-desc">
-                        Your pharmacy inventory is currently empty. Click "Add Medicine" to register your first medicine and stock quantity.
+                        Your pharmacy inventory is currently empty. Click "Add Medicine / Product" to register medicines, healthcare devices, or wellness supplies.
                       </p>
                       <button
                         type="button"
                         className="btn-add-medicine btn-empty-add"
-                        onClick={handleOpenAddMedicine}
+                        onClick={() => handleOpenAddMedicine('Medicines')}
                       >
-                        + Add Medicine
+                        + Add Medicine / Product
                       </button>
                     </div>
                   ) : filteredStock.length === 0 ? (
@@ -2341,19 +2478,20 @@ export default function Dashboard({ auth, socket, onLogout }) {
                           <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
                         </svg>
                       </div>
-                      <h3 className="empty-state-title">No matching medicines found</h3>
+                      <h3 className="empty-state-title">No matching products found</h3>
                       <p className="empty-state-desc">
                         {searchQuery
-                          ? `No medicines match "${searchQuery}" with the selected filter.`
-                          : 'No medicines match the selected filter.'}
+                          ? `No items match "${searchQuery}" with the selected filters.`
+                          : 'No items match the selected category or stock filters.'}
                       </p>
-                      {(searchQuery || stockFilter !== 'all') && (
+                      {(searchQuery || stockFilter !== 'all' || categoryFilter !== 'all') && (
                         <button
                           type="button"
                           className="btn-clear-search-filter"
                           onClick={() => {
                             setSearchQuery('');
                             setStockFilter('all');
+                            setCategoryFilter('all');
                           }}
                         >
                           Clear search & filters
@@ -2365,10 +2503,11 @@ export default function Dashboard({ auth, socket, onLogout }) {
                       <table>
                         <thead>
                           <tr>
-                            <th>Medicine</th>
+                            <th>Product / Medicine</th>
+                            <th>Category</th>
                             <th>Stock</th>
                             <th>Status</th>
-                            <th>Price / tablet</th>
+                            <th>Price</th>
                             <th>Action</th>
                           </tr>
                         </thead>
@@ -2377,12 +2516,26 @@ export default function Dashboard({ auth, socket, onLogout }) {
                             const status = getStockStatus(s.quantity);
                             const isOutOfStock = status === 'out_of_stock';
                             const isLowStock = status === 'low_stock';
+                            const isMed = (s.category || 'Medicines') === 'Medicines';
 
                             return (
                               <tr key={s._id}>
                                 <td>
                                   <span className="med-name-primary">{s.medicine}</span>
-                                  <small>{s.generic || '—'}</small>
+                                  {isMed ? (
+                                    <small>{s.generic || '—'}</small>
+                                  ) : (
+                                    <small>
+                                      {s.brand ? <strong>{s.brand}</strong> : null}
+                                      {s.brand && s.description ? ' • ' : ''}
+                                      {s.description || (!s.brand ? '—' : '')}
+                                    </small>
+                                  )}
+                                </td>
+                                <td>
+                                  <span className="inventory-cat-badge">
+                                    {s.category || 'Medicines'}
+                                  </span>
                                 </td>
                                 <td className={isOutOfStock ? 'low out-of-stock-text' : isLowStock ? 'low low-stock-text' : ''}>
                                   <strong>{s.quantity}</strong>
@@ -2394,7 +2547,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                                   </span>
                                 </td>
                                 <td>
-                                  ₹{s.price ?? '—'} / tablet
+                                  ₹{s.price ?? '—'} {isMed ? '/ tablet' : '/ unit'}
                                 </td>
                                 <td>
                                   <div className="stock-actions">
@@ -2405,15 +2558,7 @@ export default function Dashboard({ auth, socket, onLogout }) {
                                     >
                                       Edit
                                     </button>
-                                    <button
-                                      type="button"
-                                      className="btn-transfer-stock"
-                                      onClick={() => handleInitiateTransfer(s)}
-                                      disabled={s.quantity <= 0}
-                                      title={s.quantity <= 0 ? 'No stock available to transfer' : `Transfer ${s.medicine} to another branch`}
-                                    >
-                                      Transfer
-                                    </button>
+
                                     <button
                                       type="button"
                                       className="delete-button"
@@ -2943,13 +3088,13 @@ export default function Dashboard({ auth, socket, onLogout }) {
                         required
                       >
                         <option value="">-- Select Medicine --</option>
-                        {stock.map(s => (
+                        {stock.filter(s => !s.category || s.category === 'Medicines').map(s => (
                           <option key={s._id} value={s._id} disabled={s.quantity <= 0}>
                             {s.medicine} {s.generic ? `(${s.generic})` : ''} — Available: {s.quantity} units {s.quantity <= 0 ? '(Out of Stock)' : ''}
                           </option>
                         ))}
                       </select>
-                      {stock.length === 0 && !loading && (
+                      {stock.filter(s => !s.category || s.category === 'Medicines').length === 0 && !loading && (
                         <p className="send-stock-warning">
                           No medicines available in this branch inventory to transfer.
                         </p>

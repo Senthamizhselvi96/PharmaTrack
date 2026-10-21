@@ -6,7 +6,7 @@ import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { Server } from 'socket.io';
-import { Patient, Pharmacy, Stock, Reservation, Branch, Staff, TransferRequest, ActivityLog } from './models/index.js';
+import { Patient, Pharmacy, Stock, Reservation, Branch, Staff, TransferRequest, ActivityLog, PRODUCT_CATEGORIES } from './models/index.js';
 import {
   ensureMainBranchForPharmacy,
   getOwnerBranches,
@@ -422,8 +422,17 @@ app.post('/api/auth/staff/register', wrap(async (req, res) => {
 
 // ---------- Pharmacy inventory ----------
 app.get('/api/pharmacy/stock', auth(['pharmacy', 'staff']), wrap(async (req, res) => {
+  const catFilter = {};
+  if (req.query.category && req.query.category !== 'all') {
+    if (req.query.category === 'Medicines') {
+      catFilter.$or = [{ category: 'Medicines' }, { category: { $exists: false } }, { category: null }];
+    } else {
+      catFilter.category = req.query.category;
+    }
+  }
+
   if (req.role === 'staff') {
-    return res.json(await Stock.find({ branch: req.branchId }).sort('medicine'));
+    return res.json(await Stock.find({ branch: req.branchId, ...catFilter }).sort('medicine'));
   }
 
   // Pharmacy owner
@@ -435,7 +444,7 @@ app.get('/api/pharmacy/stock', auth(['pharmacy', 'staff']), wrap(async (req, res
     if (!branch) {
       throw httpError(403, 'Access denied: You do not have permission to view stock for this branch');
     }
-    return res.json(await Stock.find({ branch: branch._id }).sort('medicine'));
+    return res.json(await Stock.find({ branch: branch._id, ...catFilter }).sort('medicine'));
   }
 
   // Backward-compatible fallback: Main Branch stock
@@ -447,14 +456,33 @@ app.get('/api/pharmacy/stock', auth(['pharmacy', 'staff']), wrap(async (req, res
   const branchFilter = mainBranch
     ? { $or: [{ branch: mainBranch._id }, { branch: { $exists: false } }, { branch: null }] }
     : {};
-  res.json(await Stock.find({ pharmacy: req.userId, ...branchFilter }).sort('medicine'));
+  res.json(await Stock.find({ pharmacy: req.userId, ...branchFilter, ...catFilter }).sort('medicine'));
 }));
 
 app.put('/api/pharmacy/stock', auth(['pharmacy', 'staff']), wrap(async (req, res) => {
-  const { medicine, generic, quantity, price } = req.body;
-  if (!medicine || !String(medicine).trim()) throw new Error('Medicine name is required');
+  const {
+    medicine,
+    name,
+    productName,
+    generic,
+    quantity,
+    price,
+    category,
+    brand,
+    description: desc
+  } = req.body;
+
+  const targetCategory = PRODUCT_CATEGORIES.includes(category) ? category : 'Medicines';
+  const cleanMed = String(medicine || productName || name || '').trim();
+  if (!cleanMed) {
+    throw new Error(targetCategory === 'Medicines' ? 'Medicine name is required' : 'Product name is required');
+  }
+
   const qty = Math.floor(Number(quantity) || 0);
   if (qty < 0) throw new Error('Quantity cannot be negative');
+  if (price !== undefined && price !== '' && price !== null && Number(price) < 0) {
+    throw new Error('Price cannot be negative');
+  }
 
   let targetPharmacyId;
   let targetBranchId;
@@ -485,7 +513,6 @@ app.put('/api/pharmacy/stock', auth(['pharmacy', 'staff']), wrap(async (req, res
     }
   }
 
-  const cleanMed = String(medicine).trim();
   const existingStock = await Stock.findOne({ branch: targetBranchId, medicine: cleanMed });
 
   const stock = await Stock.findOneAndUpdate(
@@ -494,7 +521,10 @@ app.put('/api/pharmacy/stock', auth(['pharmacy', 'staff']), wrap(async (req, res
       $set: {
         pharmacy: targetPharmacyId,
         branch: targetBranchId,
-        generic: generic ? String(generic).trim() : '',
+        category: targetCategory,
+        generic: targetCategory === 'Medicines' ? (generic ? String(generic).trim() : '') : '',
+        brand: brand ? String(brand).trim() : '',
+        description: desc ? String(desc).trim() : '',
         quantity: qty,
         price: price === '' || price == null ? undefined : Number(price)
       }
@@ -506,14 +536,14 @@ app.put('/api/pharmacy/stock', auth(['pharmacy', 'staff']), wrap(async (req, res
 
   // Activity Audit Log
   const actor = await resolveActorInfo(req);
-  let actionType = 'medicine_added';
-  let description = `${actor.displayName} added ${cleanMed} (${qty} units) to branch inventory`;
+  let actionType = targetCategory === 'Medicines' ? 'medicine_added' : 'product_added';
+  let description = `${actor.displayName} added ${cleanMed} (${targetCategory}) (${qty} units) to branch inventory`;
   if (existingStock) {
     if (existingStock.quantity !== qty) {
       actionType = qty > existingStock.quantity ? 'stock_increased' : 'stock_decreased';
       description = `${actor.displayName} updated ${cleanMed} stock quantity from ${existingStock.quantity} to ${qty}`;
     } else {
-      actionType = 'medicine_updated';
+      actionType = targetCategory === 'Medicines' ? 'medicine_updated' : 'product_updated';
       description = `${actor.displayName} updated details for ${cleanMed}`;
     }
   }
@@ -528,11 +558,13 @@ app.put('/api/pharmacy/stock', auth(['pharmacy', 'staff']), wrap(async (req, res
     description,
     details: {
       medicine: cleanMed,
+      category: targetCategory,
+      brand: stock.brand,
       quantity: qty,
       before: existingStock
-        ? { quantity: existingStock.quantity, price: existingStock.price, generic: existingStock.generic }
+        ? { quantity: existingStock.quantity, price: existingStock.price, generic: existingStock.generic, category: existingStock.category }
         : null,
-      after: { quantity: qty, price: stock.price, generic: stock.generic }
+      after: { quantity: qty, price: stock.price, generic: stock.generic, category: targetCategory }
     }
   });
 

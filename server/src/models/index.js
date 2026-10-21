@@ -71,11 +71,29 @@ const staffSchema = new Schema({
   isActive: { type: Boolean, default: true }
 }, { timestamps: true });
 
+export const PRODUCT_CATEGORIES = [
+  'Medicines',
+  'Healthcare Devices',
+  'First Aid & Medical Supplies',
+  'Personal Care & Skincare',
+  'Baby & Mother Care',
+  'Nutrition & Wellness',
+  'Hygiene & Essentials'
+];
+
 const stockSchema = new Schema({
   pharmacy: { type: Schema.Types.ObjectId, ref: 'Pharmacy', required: true, index: true },
   branch: { type: Schema.Types.ObjectId, ref: 'Branch', index: true },
   medicine: { type: String, required: true, trim: true },
   generic: { type: String, trim: true },
+  category: {
+    type: String,
+    enum: PRODUCT_CATEGORIES,
+    default: 'Medicines',
+    index: true
+  },
+  brand: { type: String, trim: true, default: '' },
+  description: { type: String, trim: true, default: '' },
   quantity: { type: Number, min: 0, default: 0 },
   price: { type: Number, min: 0 }
 }, { timestamps: true });
